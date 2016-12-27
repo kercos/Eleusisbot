@@ -9,6 +9,7 @@ from card import Card
 
 # sprite sheet proprerties
 DECK_SPRITE_SHEET_IMAGE = Image.open("img/deck_small.png")
+CARD_QM = Image.open("img/card_small_QM.png")
 CARD_DIMENSIONS = (36, 50)
 INITIAL_PIXELS = (0,0)
 IN_BETWEEN_PIXELS = (0,2)
@@ -24,7 +25,8 @@ FONT = ImageFont.truetype("fonts/Roboto-Regular.ttf",FONT_SIZE)
 MARGIN = 30
 SPACE_CARDS = 10
 TRIANGLE_DIMENSION = 5
-OVERLAPPING_REJECTED_CARDS = 5
+OVERLAPPING_REJECTED_CARDS = 8
+TEXT_PADDING = 8
 
 TEXT_HEIGHT = FONT.getsize('M')[1]
 
@@ -81,15 +83,24 @@ def getElements(accepted_cards, rejected_cards):
     texts = []
     lines = []
     polygons = []
-    for i, ac in enumerate(accepted_cards):
-        c = card.getCardFromRepr(ac)
-        card_img = getCardImg(c)
-        x_dst = MARGIN + i*(CARD_DIMENSIONS[0] + SPACE_CARDS)
-        y_dst = MARGIN
-        cards.append({'img': card_img, 'box': (x_dst, y_dst)})
+
+    # position accepted and rejected cards
     firstRejectedColumn = None
-    for i, rc_colum in enumerate(rejected_cards):
-        x_dst = MARGIN + i * (CARD_DIMENSIONS[0] + SPACE_CARDS)
+    x_dst_column = MARGIN
+    for i in range(len(accepted_cards)+1):
+        x_center = x_dst_column + CARD_DIMENSIONS[0] / 2
+        year_text = "Year {}".format(i)
+        width_year = FONT.getsize(year_text)[0]
+        texts.append({'text': year_text, 'box': (x_center - width_year / 2, MARGIN - FONT_SIZE - TEXT_PADDING)})
+        if i < len(accepted_cards):
+            ac = accepted_cards[i]
+            c = card.getCardFromRepr(ac)
+            card_img = getCardImg(c)
+        else:
+            card_img = CARD_QM
+        cards.append({'img': card_img, 'box': (x_dst_column, MARGIN)})
+        rc_colum = rejected_cards[i]
+        x_dst_last_rejected = 0
         for j, rej_row in enumerate(rc_colum):
             y_dst_row = MARGIN + SPACE_CARDS + (CARD_DIMENSIONS[1] + SPACE_CARDS) * (1 + j)
             for k, rc in enumerate(rej_row):
@@ -97,9 +108,13 @@ def getElements(accepted_cards, rejected_cards):
                     firstRejectedColumn = i
                 c = card.getCardFromRepr(rc)
                 card_img = getCardImg(c)
-                x_dst_new = x_dst + k * (CARD_DIMENSIONS[0] - OVERLAPPING_REJECTED_CARDS)
-                cards.append({'img': card_img, 'box': (x_dst_new, y_dst_row)})
-    # render Rejected after
+                x_dst_last_rejected = x_dst_column + k * (CARD_DIMENSIONS[0] - OVERLAPPING_REJECTED_CARDS)
+                cards.append({'img': card_img, 'box': (x_dst_last_rejected, y_dst_row)})
+        if x_dst_last_rejected:
+            x_dst_column = x_dst_last_rejected
+        x_dst_column += CARD_DIMENSIONS[0] + SPACE_CARDS
+
+    # position "Rejected after" with lines and arrow
     if firstRejectedColumn:
         x_first_rejected_card = MARGIN + firstRejectedColumn * (CARD_DIMENSIONS[0] + SPACE_CARDS) - SPACE_CARDS
         y_half_first_rejected_card = MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS + CARD_DIMENSIONS[1]/2
