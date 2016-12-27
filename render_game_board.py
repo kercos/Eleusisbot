@@ -48,28 +48,45 @@ def render(g, show=False):
     accepted_cards = g.getAcceptedCards()
     rejected_cards = g.getRejectedCards()
 
-    accepted_columns = len(g.getAcceptedCards())
-    max_y_cards = max([len(x) for x in rejected_cards])
-    max_x_accepted_cards = MARGIN * 2 + CARD_DIMENSIONS[0] * accepted_columns + SPACE_CARDS * (accepted_columns - 1)
-
-    rejected_columns = len(rejected_cards) if rejected_cards[-1] else len(rejected_cards) - 1
-    last_rejected_column = rejected_cards[rejected_columns-1]
-    max_x_cards_rejected=0
-    if last_rejected_column:
-        max_row_last_rejected_column = max([len(x) for x in last_rejected_column])
-        max_x_cards_rejected = 2*MARGIN + CARD_DIMENSIONS[0] * rejected_columns + max_row_last_rejected_column * (CARD_DIMENSIONS[0] - OVERLAPPING_REJECTED_CARDS)
-
-    width = max(max_x_cards_rejected, max_x_accepted_cards)
-    height = 2*MARGIN + (CARD_DIMENSIONS[1] + SPACE_CARDS) * (1 + max_y_cards)
+    cards, texts, lines, polygons, width, height = getElements(accepted_cards, rejected_cards)
 
     img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
     draw = ImageDraw.Draw(img)
+
+    for c in cards:
+        img.paste(c['img'], box=c['box'], mask=c['img'])
+    for t in texts:
+        draw.text(t['box'], t['text'], (0, 0, 0), font=FONT)
+    for l in lines:
+        draw.line(l['box'], fill=(0, 0, 0, 255), width=1)
+    for p in polygons:
+        draw.polygon(p['box'], fill=(0, 0, 0, 255), outline=(0, 0, 0, 255))
+
+    if show:
+        img.show()
+    else:
+        imgData = StringIO.StringIO()
+        img.save(imgData, format="PNG")
+        return imgData.getvalue()
+
+
+'''
+card = {'img': card_img, 'box': (x_dst, y_dst)}
+text = {'text': text, 'box': (x_dst, y_dst)}
+line = {'box': (x1, y1, x2, y2)}
+poligon = {'box': (x1, y1, x2, y2, ..., xN, yN)}
+'''
+def getElements(accepted_cards, rejected_cards):
+    cards = []
+    texts = []
+    lines = []
+    polygons = []
     for i, ac in enumerate(accepted_cards):
         c = card.getCardFromRepr(ac)
         card_img = getCardImg(c)
         x_dst = MARGIN + i*(CARD_DIMENSIONS[0] + SPACE_CARDS)
         y_dst = MARGIN
-        img.paste(card_img, box=(x_dst, y_dst), mask=card_img)
+        cards.append({'img': card_img, 'box': (x_dst, y_dst)})
     firstRejectedColumn = None
     for i, rc_colum in enumerate(rejected_cards):
         x_dst = MARGIN + i * (CARD_DIMENSIONS[0] + SPACE_CARDS)
@@ -81,33 +98,32 @@ def render(g, show=False):
                 c = card.getCardFromRepr(rc)
                 card_img = getCardImg(c)
                 x_dst_new = x_dst + k * (CARD_DIMENSIONS[0] - OVERLAPPING_REJECTED_CARDS)
-                img.paste(card_img, box=(x_dst_new, y_dst_row), mask=card_img)
-    ## draw line under cards
-    y_line_separation = MARGIN + CARD_DIMENSIONS[1] + SPACE_CARDS
-    draw.line( (MARGIN/2, y_line_separation, width-MARGIN/2, y_line_separation), fill=(0,0,0,255), width=1)
+                cards.append({'img': card_img, 'box': (x_dst_new, y_dst_row)})
+    # render Rejected after
     if firstRejectedColumn:
         x_first_rejected_card = MARGIN + firstRejectedColumn * (CARD_DIMENSIONS[0] + SPACE_CARDS) - SPACE_CARDS
         y_half_first_rejected_card = MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS + CARD_DIMENSIONS[1]/2
         x_corner = x_first_rejected_card - CARD_DIMENSIONS[0]/2
         y_arrow = MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS
-        draw.line((x_first_rejected_card, y_half_first_rejected_card, x_corner, y_half_first_rejected_card), fill=(0,0,0,255), width=1)
-        draw.line((x_corner, y_half_first_rejected_card, x_corner, y_arrow), fill=(0, 0, 0, 255), width=1)
-        draw.polygon((x_corner, y_arrow, x_corner-TRIANGLE_DIMENSION, y_arrow+TRIANGLE_DIMENSION, x_corner+TRIANGLE_DIMENSION, y_arrow+TRIANGLE_DIMENSION), fill=(0, 0, 0, 255), outline=(0, 0, 0, 255))
+        lines.append({'box':(x_first_rejected_card, y_half_first_rejected_card, x_corner, y_half_first_rejected_card)})
+        lines.append({'box':(x_corner, y_half_first_rejected_card, x_corner, y_arrow)})
+        polygons.append({'box':(x_corner, y_arrow, x_corner-TRIANGLE_DIMENSION, y_arrow+TRIANGLE_DIMENSION, x_corner+TRIANGLE_DIMENSION, y_arrow+TRIANGLE_DIMENSION)})
         width_rejected = FONT.getsize('Rejected')[0]
         width_after = FONT.getsize('after')[0]
         text_y_base = y_half_first_rejected_card + TRIANGLE_DIMENSION
-        draw.text((x_corner-width_rejected/2, text_y_base), "Rejected", (0, 0, 0), font=FONT)
-        draw.text((x_corner-width_after/2, text_y_base + TEXT_HEIGHT), "after", (0, 0, 0), font=FONT)
-    if show:
-        img.show()
-    else:
-        imgData = StringIO.StringIO()
-        img.save(imgData, format="PNG")
-        return imgData.getvalue()
+        texts.append({'text': 'Rejected', 'box':(x_corner-width_rejected/2, text_y_base)})
+        texts.append({'text': 'after', 'box': (x_corner-width_after/2, text_y_base + TEXT_HEIGHT)})
 
+    maxCardX = max(c['box'][0] for c in cards) + CARD_DIMENSIONS[0]
+    maxCardY = max(c['box'][1] for c in cards) + CARD_DIMENSIONS[1]
+    width = maxCardX + MARGIN
+    height = maxCardY + MARGIN
 
+    ## draw line under cards
+    y_line_separation = MARGIN + CARD_DIMENSIONS[1] + SPACE_CARDS
+    lines.append({'box': (MARGIN / 2, y_line_separation, width - MARGIN / 2, y_line_separation)})
 
-
+    return cards, texts, lines, polygons, width, height
 
 def getTestImage(width, height, show=False):
     img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
