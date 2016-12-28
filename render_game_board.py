@@ -7,9 +7,11 @@ import random
 import card
 from card import Card
 
-# sprite sheet proprerties
+# sprite sheet imgs and proprerties
 DECK_SPRITE_SHEET_IMAGE = Image.open("img/deck_small.png")
 CARD_QM = Image.open("img/card_small_QM.png")
+SUDDEN_DEATH = Image.open("img/SuddenDeath_small.png")
+SUDDEN_DEATH_DIM = 50
 CARD_DIMENSIONS = (36, 50)
 INITIAL_PIXELS = (0,0)
 IN_BETWEEN_PIXELS = (0,2)
@@ -23,6 +25,7 @@ FONT_SIZE = 12
 FONT = ImageFont.truetype("fonts/Roboto-Regular.ttf",FONT_SIZE)
 
 MARGIN = 30
+TOP_MARGIN = MARGIN * 3
 SPACE_CARDS = 10
 TRIANGLE_DIMENSION = 5
 OVERLAPPING_REJECTED_CARDS = 8
@@ -47,15 +50,13 @@ def getCardImg(card):
     return DECK_SPRITE_SHEET_IMAGE.crop(box = (x, y, x + CARD_DIMENSIONS[0], y + CARD_DIMENSIONS[1]))
 
 def render(g, show=False):
-    accepted_cards = g.getAcceptedCards()
-    rejected_cards = g.getRejectedCards()
 
-    cards, texts, lines, polygons, width, height = getElements(accepted_cards, rejected_cards)
+    images, texts, lines, polygons, width, height = getElements(g)
 
     img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
     draw = ImageDraw.Draw(img)
 
-    for c in cards:
+    for c in images:
         img.paste(c['img'], box=c['box'], mask=c['img'])
     for t in texts:
         draw.text(t['box'], t['text'], (0, 0, 0), font=FONT)
@@ -78,8 +79,12 @@ text = {'text': text, 'box': (x_dst, y_dst)}
 line = {'box': (x1, y1, x2, y2)}
 poligon = {'box': (x1, y1, x2, y2, ..., xN, yN)}
 '''
-def getElements(accepted_cards, rejected_cards):
-    cards = []
+def getElements(g):
+
+    accepted_cards = g.getAcceptedCards()
+    rejected_cards = g.getRejectedCards()
+
+    images = []
     texts = []
     lines = []
     polygons = []
@@ -91,35 +96,35 @@ def getElements(accepted_cards, rejected_cards):
         x_center = x_dst_column + CARD_DIMENSIONS[0] / 2
         year_text = "Year {}".format(i)
         width_year = FONT.getsize(year_text)[0]
-        texts.append({'text': year_text, 'box': (x_center - width_year / 2, MARGIN - FONT_SIZE - TEXT_PADDING)})
+        texts.append({'text': year_text, 'box': (x_center - width_year / 2, TOP_MARGIN - FONT_SIZE - TEXT_PADDING)})
         if i < len(accepted_cards):
             ac = accepted_cards[i]
             c = card.getCardFromRepr(ac)
             card_img = getCardImg(c)
         else:
             card_img = CARD_QM
-        cards.append({'img': card_img, 'box': (x_dst_column, MARGIN)})
+        images.append({'img': card_img, 'box': (x_dst_column, TOP_MARGIN)})
         rc_colum = rejected_cards[i]
-        x_dst_last_rejected = 0
+        max_x_dst_last_rejected = x_dst_column
         for j, rej_row in enumerate(rc_colum):
-            y_dst_row = MARGIN + SPACE_CARDS + (CARD_DIMENSIONS[1] + SPACE_CARDS) * (1 + j)
+            y_dst_row = TOP_MARGIN + SPACE_CARDS + (CARD_DIMENSIONS[1] + SPACE_CARDS) * (1 + j)
             for k, rc in enumerate(rej_row):
                 if firstRejectedColumn==None:
                     firstRejectedColumn = i
                 c = card.getCardFromRepr(rc)
                 card_img = getCardImg(c)
                 x_dst_last_rejected = x_dst_column + k * (CARD_DIMENSIONS[0] - OVERLAPPING_REJECTED_CARDS)
-                cards.append({'img': card_img, 'box': (x_dst_last_rejected, y_dst_row)})
-        if x_dst_last_rejected:
-            x_dst_column = x_dst_last_rejected
-        x_dst_column += CARD_DIMENSIONS[0] + SPACE_CARDS
+                images.append({'img': card_img, 'box': (x_dst_last_rejected, y_dst_row)})
+                if x_dst_last_rejected > max_x_dst_last_rejected:
+                    max_x_dst_last_rejected = x_dst_last_rejected
+        x_dst_column = max_x_dst_last_rejected + CARD_DIMENSIONS[0] + SPACE_CARDS
 
     # position "Rejected after" with lines and arrow
     if firstRejectedColumn:
         x_first_rejected_card = MARGIN + firstRejectedColumn * (CARD_DIMENSIONS[0] + SPACE_CARDS) - SPACE_CARDS
-        y_half_first_rejected_card = MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS + CARD_DIMENSIONS[1]/2
+        y_half_first_rejected_card = TOP_MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS + CARD_DIMENSIONS[1]/2
         x_corner = x_first_rejected_card - CARD_DIMENSIONS[0]/2
-        y_arrow = MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS
+        y_arrow = TOP_MARGIN + CARD_DIMENSIONS[1] + 2 * SPACE_CARDS
         lines.append({'box':(x_first_rejected_card, y_half_first_rejected_card, x_corner, y_half_first_rejected_card)})
         lines.append({'box':(x_corner, y_half_first_rejected_card, x_corner, y_arrow)})
         polygons.append({'box':(x_corner, y_arrow, x_corner-TRIANGLE_DIMENSION, y_arrow+TRIANGLE_DIMENSION, x_corner+TRIANGLE_DIMENSION, y_arrow+TRIANGLE_DIMENSION)})
@@ -129,16 +134,25 @@ def getElements(accepted_cards, rejected_cards):
         texts.append({'text': 'Rejected', 'box':(x_corner-width_rejected/2, text_y_base)})
         texts.append({'text': 'after', 'box': (x_corner-width_after/2, text_y_base + TEXT_HEIGHT)})
 
-    maxCardX = max(c['box'][0] for c in cards) + CARD_DIMENSIONS[0]
-    maxCardY = max(c['box'][1] for c in cards) + CARD_DIMENSIONS[1]
-    width = maxCardX + MARGIN
+    ## sudden death info
+    cards_to_sd = max(0, g.cardsToSuddenDeath())
+    sd_text = 'Cards to suddent death: {}'.format(cards_to_sd)
+    sd_text_width = FONT.getsize(sd_text)[0]
+    texts.append({'text': sd_text, 'box': (MARGIN, MARGIN - TEXT_HEIGHT/2)})
+    if cards_to_sd == 0:
+        images.append({'img': SUDDEN_DEATH, 'box': (MARGIN + sd_text_width + TEXT_PADDING, MARGIN - SUDDEN_DEATH_DIM/2)})
+
+
+    maxCardX = max(c['box'][0] for c in images) + CARD_DIMENSIONS[0]
+    maxCardY = max(c['box'][1] for c in images) + CARD_DIMENSIONS[1]
+    width = max(maxCardX + MARGIN, 2*MARGIN+sd_text_width)
     height = maxCardY + MARGIN
 
     ## draw line under cards
-    y_line_separation = MARGIN + CARD_DIMENSIONS[1] + SPACE_CARDS
+    y_line_separation = TOP_MARGIN + CARD_DIMENSIONS[1] + SPACE_CARDS
     lines.append({'box': (MARGIN / 2, y_line_separation, width - MARGIN / 2, y_line_separation)})
 
-    return cards, texts, lines, polygons, width, height
+    return images, texts, lines, polygons, width, height
 
 def getTestImage(width, height, show=False):
     img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
