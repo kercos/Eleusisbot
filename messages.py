@@ -16,6 +16,7 @@ INSTRUCTIONS = utility.unindent(
     to get in touch with other players.
 
     Have fun!! 😀
+    Federico (@kercos)
     """
 )
 

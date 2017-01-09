@@ -14,7 +14,6 @@ VAR_LAST_KEYBOARD = 'last_keyboard'
 VAR_LAST_STATE = 'last_state'
 VAR_GAME_ROOM = 'game_room'
 VAR_CREATE_GAME = 'create_game' # {'stage': int, 'game_name': string, 'number_players': int, ...}
-
 #------------------------
 # Person class
 #------------------------
@@ -29,6 +28,7 @@ class Person(ndb.Model):
     enabled = ndb.BooleanProperty(default=True)
     game_room = ndb.StringProperty()
     tmp_variables = ndb.PickleProperty()
+    demo_level = ndb.IntegerProperty(default=1)
 
     def getId(self):
         return self.key.id()
@@ -128,6 +128,17 @@ class Person(ndb.Model):
         if put:
             self.put()
 
+    def getDemoLevel(self):
+        return self.demo_level
+
+    def reachedMaxLevel(self):
+        import autorule
+        return self.getDemoLevel()>autorule.getMaxLevel()
+
+    def increaseDemoLevel(self):
+        if not self.reachedMaxLevel():
+            self.demo_level += 1
+
     def removeTmpVariable(self, var_name, put=False):
         self.tmp_variables.pop(var_name, None)
         if put:
@@ -137,11 +148,11 @@ class Person(ndb.Model):
         self.tmp_variables = {}
 
 
-def setGameRoomMulti(playerIdList, gameRoom):
+def removeGameFromPeople(playerIdList):
     playerIdListStr = [str(id) for id in playerIdList]
     players = ndb.get_multi([ndb.Key(Person, k) for k in playerIdListStr])
     for p in players:
-        p.setGameRoom(gameRoom)
+        p.setGameRoom(None)
     create_futures = ndb.put_multi_async(players)
     ndb.Future.wait_all(create_futures)
 
@@ -161,9 +172,10 @@ def addPerson(chat_id, name, last_name, username):
     return p
 
 
-def updateAll():
+def resetAll():
     all_people = Person.query().fetch()
     for p in all_people:
         p.setGameRoom(None)
+        p.demo_level = 1
     create_futures = ndb.put_multi_async(all_people)
     ndb.Future.wait_all(create_futures)

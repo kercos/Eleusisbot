@@ -19,7 +19,7 @@ IN_BETWEEN_PIXELS = (0,2)
 
 #CLUBS, HEARTS, SPADES, DIAMONDS = 'CLUBS', 'HEARTS', 'SPADES', 'DIAMONDS'
 SUITS = [card.SPADES, card.CLUBS, card.HEARTS, card.DIAMONDS]
-NUMBERS = ['2','3','4','5','6','7','8','9','10','J','Q','K','1']
+NUMBERS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A']
 
 FONT_SIZE = 12
 FONT = ImageFont.truetype("fonts/Roboto-Regular.ttf",FONT_SIZE)
@@ -94,7 +94,7 @@ def getElements(g):
     x_dst_column = MARGIN
     for i in range(len(accepted_cards)+1):
         x_center = x_dst_column + CARD_DIMENSIONS[0] / 2
-        year_text = "Year {}".format(i)
+        year_text = "Card {}".format(i)
         width_year = FONT.getsize(year_text)[0]
         texts.append({'text': year_text, 'box': (x_center - width_year / 2, TOP_MARGIN - FONT_SIZE - TEXT_PADDING)})
         if i < len(accepted_cards):
@@ -136,7 +136,7 @@ def getElements(g):
 
     ## sudden death info
     cards_to_sd = max(0, g.cardsToSuddenDeath())
-    sd_text = 'Cards to suddent death: {}'.format(cards_to_sd)
+    sd_text = 'Cards to sudden death: {}'.format(cards_to_sd)
     sd_text_width = FONT.getsize(sd_text)[0]
     texts.append({'text': sd_text, 'box': (MARGIN, MARGIN - TEXT_HEIGHT/2)})
     if cards_to_sd == 0:

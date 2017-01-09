@@ -15,30 +15,33 @@ import webapp2
 import json
 import card
 import random
+import autorule
 
 #------------------------
 # GAME_VARIABLES KEYS
 #------------------------
+DEMO_MODE = 'demo_mode' # --> bool
+GAME_HAND = 'game_hand' # --> int
 GOD_ID = "god_id" # --> int
 GOD_RULE = "god_rule" # --> str
 STARTING_CARD = "starting_card" # --> str
 PLAYERS_ID = 'players_id' # --> [player_id1, player_id2, ...]
 PLAYERS_NAME = 'players_name' # --> { player_id1: string, player_id2: string, ... }
-PLAYERS_CARDS = 'players_cards' # --> { player_id1: string, player_id2: string, ... }
-PLAYERS_SCORES = 'players_scores' # --> { player_id1: int, player_id2: int, ...}
+PLAYERS_CARDS = 'players_cards' # --> { player_id1: [c1, c2, ...], player_id2: [c1, c2, ...], ... }
+PLAYERS_SCORES = 'players_scores' # --> { player_id1: [currentHand, total], player_id2: [currentHand, total], ...}
 PLAYERS_HAS_BEEN_PROPHET = 'players_has_been_prophet' # --> [ player_id1, player_id2, ...]
 PLAYERS_ELIMINATED = 'players_eliminated' # --> [ player_id1, player_id2, ...]
 PLAYERS_ASK_TO_BE_A_PROPHET = 'players_ask_prophet' # --> { player_id1: bool, player_id2: bool, ...}
 CURRENT_PROPHET = 'current_prophet' # --> player_id or None
-TURN_COUNT = 'turn_count' # --> int (incremented every player's tourn)
-TURN_PLAYER_INDEX = 'turn_player_id' # --> id of the player of current turn
+TURN_PLAYER_INDEX = 'turn_player_id' # --> index of the player of current turn
 CARDS_DECK = 'cards_deck' # --> [card1_str, card2_str, ...]
 YEAR_COUNT = 'year_count' # --> int (incremented every accepted card)
 ACCEPTED_CARDS = 'accepted_cards' # --> [card1_str, card2_str, ...]
 REJECTED_CARDS = 'rejected_cards' # --> [ [ [c1_str, card2_str, ...], ... ], [...], ... ] # per each year a sequence of sequences
-PROPOSED_CARDS = 'proposed_cards' # --> [ c1, c2, ... ] # per each year a sequence of sequences
+PROPOSED_CARDS = 'proposed_cards' # --> [ c1, c2, ... ] # per each column a sequence of sequences
 CARDS_ON_TABLE = 'cards_on_table' # --> int
-CARDS_ON_TABLE_WHEN_LAST_PROPHET_STARTED = 'cards_on_table_last_prophet' # --> int
+PROPHET_ACCEPTED_REJECTED_CARDS = 'prophet_accepted_rejected_cards' # --> [int, int]
+LAST_PROPHET_DECISION = 'last_prophet_decision' # --> str
 
 #------------------------
 # Game class
@@ -47,9 +50,92 @@ CARDS_ON_TABLE_WHEN_LAST_PROPHET_STARTED = 'cards_on_table_last_prophet' # --> i
 class Game(ndb.Model):
     number_seats = ndb.IntegerProperty()
     public = ndb.BooleanProperty()
-    started = ndb.BooleanProperty()
     game_variables = ndb.PickleProperty()
     last_mod = ndb.DateTimeProperty(auto_now=True)
+
+    def resetOrDeleteGame(self):
+        import person
+        person.removeGameFromPeople(self.getPlayersId())
+        if self.isPublic():
+            self.resetGame()
+        else:
+            deleteGame(self)
+
+    def resetGame(self):
+        self.game_variables = {
+            DEMO_MODE: False,
+            GAME_HAND: 0,
+            GOD_ID: None,
+            GOD_RULE: '',
+            STARTING_CARD: '',
+            PLAYERS_ID: [],
+            PLAYERS_NAME: {},
+            PLAYERS_CARDS: {},
+            PLAYERS_SCORES: {},
+            PLAYERS_HAS_BEEN_PROPHET: [],
+            PLAYERS_ELIMINATED: [],
+            PLAYERS_ASK_TO_BE_A_PROPHET: {},
+            CURRENT_PROPHET: None,
+            TURN_PLAYER_INDEX: 0,
+            CARDS_DECK: [],
+            YEAR_COUNT: 0,
+            ACCEPTED_CARDS: [],
+            REJECTED_CARDS: [[]],
+            PROPOSED_CARDS: [],
+            CARDS_ON_TABLE: 0,
+            PROPHET_ACCEPTED_REJECTED_CARDS: [0,0],
+            LAST_PROPHET_DECISION: ''
+        }
+        self.put()
+
+    def initGame(self, demoMode=False, put=True):
+        for p_id in self.getPlayersId():
+            self.game_variables[PLAYERS_SCORES][p_id] = [0,0]
+        if demoMode:
+            self.game_variables[DEMO_MODE] = True
+        self.initNextHand(put)
+
+    def initNextHand(self, put=True):
+        currentHand = self.game_variables[GAME_HAND]
+        if not self.isDemoMode():
+            self.game_variables[GOD_ID] = self.getPlayersId()[currentHand]
+        self.game_variables[GAME_HAND] += 1
+        self.game_variables[CARDS_DECK] = card.getDeckCardListStr(parameters.INITIAL_DECKS, shuffle=True)
+        self.game_variables[PLAYERS_HAS_BEEN_PROPHET] = []
+        self.game_variables[PLAYERS_ELIMINATED] = []
+        self.game_variables[CURRENT_PROPHET] = None
+        self.game_variables[TURN_PLAYER_INDEX] = currentHand
+        self.game_variables[YEAR_COUNT] = 0
+        self.game_variables[ACCEPTED_CARDS] = []
+        self.game_variables[REJECTED_CARDS] = [[]]
+        self.game_variables[PROPOSED_CARDS] = []
+        self.game_variables[CARDS_ON_TABLE] = 0
+        self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS] = [0, 0]
+        for p_id in self.getPlayersId(excludingGod=True):
+            self.game_variables[PLAYERS_ASK_TO_BE_A_PROPHET][p_id] = False
+            if p_id == self.getGodPlayerId():
+                self.game_variables[PLAYERS_CARDS][p_id] = []
+            else:
+                self.game_variables[PLAYERS_CARDS][p_id] = self.dialCardList(parameters.CARDS_PER_PLAYER)
+        if put:
+            self.put()
+
+    def getHandNumber(self):
+        return self.game_variables[GAME_HAND]
+
+    def startGame(self):
+        self.dialCardsToPlayers()
+        starting_card = card.getCardFromRepr(self.game_variables[STARTING_CARD])
+        number = starting_card.getIntNumber()
+        self.setUpNextTurn(iterations=number)
+
+    def allHandsHaveBeenPlayed(self):
+        return self.number_seats == self.game_variables[GAME_HAND]
+
+    def getFinalWinnerName(self):
+        scoresDict = self.game_variables[PLAYERS_SCORES]
+        p_id_winner = max(scoresDict.iterkeys(), key=lambda key: scoresDict[key][1])
+        return self.getPlayerName(p_id_winner)
 
     def getGameRoomName(self):
         return self.key.id()
@@ -62,11 +148,12 @@ class Game(ndb.Model):
 
     def isGameExpired(self):
         diff_sec = (datetime.now() - self.last_mod).total_seconds()
-        if self.started:
-            return diff_sec > parameters.GAME_EXPIRATION_SECONDS_IN_GAME
         if self.getCurrentNumberOfPlayers()>0:
-            return diff_sec > parameters.GAME_EXPIRATION_SECONDS_IN_WAITING_FOR_PLAYERS
+            return diff_sec > parameters.GAME_EXPIRATION_SECONDS
         return False
+
+    def isDemoMode(self):
+        return self.game_variables[DEMO_MODE]
 
     def getNumberOfSeats(self):
         return self.number_seats
@@ -91,13 +178,15 @@ class Game(ndb.Model):
     def setGodRule(self, rule):
         self.game_variables[GOD_RULE] = rule
 
-    def getTournCount(self):
-        return self.game_variables[TURN_COUNT]
+    def getGodRule(self):
+        return self.game_variables[GOD_RULE]
 
     def getGodPlayerId(self):
-        return self.getPlayersId()[0]
+        return self.game_variables[GOD_ID]
 
-    def getGodPlayerIdAndName(self):
+    def getGodIdAndName(self):
+        if self.isDemoMode():
+            return None, "God"
         god_id = self.getGodPlayerId()
         return god_id, self.getPlayerName(god_id)
 
@@ -106,6 +195,10 @@ class Game(ndb.Model):
         if emoji:
             return [card.renderCardFromRepr(c) for c in cards]
         return cards
+
+    def getCurrentPlayerCards(self, emoji=False):
+        p_id = self.getCurrentPlayerId()
+        return self.getSinglePlayerCards(p_id, emoji)
 
     def emptySinglePlayerCards(self, p_id):
         del self.game_variables[PLAYERS_CARDS][p_id][:]  # emty list
@@ -140,9 +233,9 @@ class Game(ndb.Model):
 
     def areAllPlayersEliminated(self):
         remaining = self.number_seats - len(self.getPlayersEliminated()) -1 # god
-        if self.getCurrentProphet():
+        if self.getCurrentProphetId():
             remaining -= 1
-        return remaining == 0
+        return remaining <= 0
 
     def getPlayerAskToBeAProphet(self, p_id):
         return self.game_variables[PLAYERS_ASK_TO_BE_A_PROPHET][p_id]
@@ -152,8 +245,11 @@ class Game(ndb.Model):
         self.put()
         return self.game_variables[PLAYERS_ASK_TO_BE_A_PROPHET][p_id]
 
-    def getCardsOnTable(self):
+    def getCardsOnTableCount(self):
         return self.game_variables[CARDS_ON_TABLE]
+
+    def increaseCardsOnTableCount(self, newCardsCount):
+        self.game_variables[CARDS_ON_TABLE] += newCardsCount
 
     def getNumberOfPlayersStillInGame(self):
         return self.number_seats - len(self.getPlayersEliminated())
@@ -161,59 +257,61 @@ class Game(ndb.Model):
     def getPlayesWhoHaveBeenProphet(self):
         return self.game_variables[PLAYERS_HAS_BEEN_PROPHET]
 
-    def getCurrentProphet(self):
+    def setCurrentProphetId(self, p_id):
+        self.game_variables[CURRENT_PROPHET] = p_id
+        if p_id is not None:
+            self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS] = [0,0]
+            self.getPlayesWhoHaveBeenProphet().append(p_id)
+
+    def getCurrentProphetId(self):
         return self.game_variables[CURRENT_PROPHET]
 
-    def setCurrentProphet(self, p_id):
-        self.game_variables[CURRENT_PROPHET] = p_id
-        self.game_variables[CARDS_ON_TABLE_WHEN_LAST_PROPHET_STARTED] = self.getCardsOnTable()
+    def getCurrentProphetName(self):
+        p_id = self.game_variables[CURRENT_PROPHET]
+        return self.getPlayerName(p_id)
+
+    def getCurrentProphetIdAndName(self):
+        p_id = self.game_variables[CURRENT_PROPHET]
+        p_name = self.getPlayerName(p_id)
+        return p_id, p_name
+
+    def getCurrentJudgeIdNameIsProphet(self):
+        prophet_id = self.getCurrentProphetId()
+        if prophet_id is not None:
+            result = list(self.getCurrentProphetIdAndName())
+            result.append(True)
+            return result
+        elif self.isDemoMode():
+            return None, None, prophet_id
+        result = list(self.getGodIdAndName())
+        result.append(False)
+        return result
+
+    def getLastProphetDecision(self):
+        return self.game_variables[LAST_PROPHET_DECISION]
+
+    def setLastProphetDecision(self, input, put=True):
+        self.game_variables[LAST_PROPHET_DECISION] = input
+        if put:
+            self.put()
 
     def cardsToSuddenDeath(self):
-        if self.getCurrentProphet():
-            cardsOnTableWhenLastProphetStarted = self.game_variables[CARDS_ON_TABLE_WHEN_LAST_PROPHET_STARTED]
-            return parameters.CARDS_TO_SUDDENT_DEATH_PROPHET - cardsOnTableWhenLastProphetStarted
-        return parameters.CARDS_TO_SUDDEN_DEATH_STANDARD - self.getCardsOnTable()
+        if self.getCurrentProphetId():
+            cardsSinceLastProphetStarted = sum(self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS])
+            return parameters.CARDS_TO_SUDDEN_DEATH_PROPHET - cardsSinceLastProphetStarted
+        return parameters.CARDS_TO_SUDDEN_DEATH_STANDARD - self.getCardsOnTableCount()
 
     def isSuddenDeath(self):
         return self.cardsToSuddenDeath()<=0
 
-    def resetGame(self):
-        self.game_variables = {
-            GOD_RULE: '',
-            STARTING_CARD: '',
-            PLAYERS_ID: [],
-            PLAYERS_NAME: {},
-            PLAYERS_CARDS: {},
-            PLAYERS_SCORES: {},
-            PLAYERS_HAS_BEEN_PROPHET: [],
-            PLAYERS_ELIMINATED: [],
-            PLAYERS_ASK_TO_BE_A_PROPHET: {},
-            CURRENT_PROPHET: None,
-            TURN_COUNT: 0,
-            TURN_PLAYER_INDEX: 0,
-            CARDS_DECK: [],
-            YEAR_COUNT: 0,
-            ACCEPTED_CARDS: [],
-            REJECTED_CARDS: [[]],
-            PROPOSED_CARDS: [],
-            CARDS_ON_TABLE: 0,
-            CARDS_ON_TABLE_WHEN_LAST_PROPHET_STARTED: 0
-        }
-        self.started = False
-        self.put()
-
-    def initializeCardsDeck(self, put=True):
-        self.game_variables[CARDS_DECK] = card.getDeckCardListStr(parameters.INITIAL_DECKS, shuffle=True)
-        if put:
-            self.put()
-
-    def getNextStartingCard(self):
+    def getNextStartingCard(self, put=True):
         starting_card = self.game_variables[STARTING_CARD]
         if starting_card:
             self.game_variables[CARDS_DECK].append(starting_card)
         selected = self.dialCardList(1)[0]
         self.game_variables[STARTING_CARD] = selected
-        self.put()
+        if put:
+            self.put()
         #logging.debug("Newly selected starting card: {}".format(selected))
         return card.renderCardFromRepr(selected)
 
@@ -225,24 +323,7 @@ class Game(ndb.Model):
 
     def acceptStartingCard(self):
         starting_card = self.getStartingCard()
-        self.game_variables[CARDS_ON_TABLE] += 1
-        self.getAcceptedCards().append(starting_card)
-        self.getRejectedCards().append([])
-
-    def startGame(self):
-        self.initializePlayersVariables()
-        self.dialCardsToPlayers()
-        self.started = True
-        starting_card = card.getCardFromRepr(self.game_variables[STARTING_CARD])
-        number = starting_card.getIntNumber()
-        self.setUpNextTurn(iterations=number)
-
-    def initializePlayersVariables(self):
-        for p_id in self.getPlayersId():
-            self.game_variables[PLAYERS_SCORES][p_id] = 0
-            self.game_variables[PLAYERS_ASK_TO_BE_A_PROPHET][p_id] = False
-            if p_id != self.getGodPlayerId():
-                self.game_variables[PLAYERS_CARDS][p_id] = self.dialCardList(parameters.CARDS_PER_PLAYER)
+        self.acceptSingleCard(starting_card)
 
     def dialCardsToPlayers(self):
         for p_id in self.getPlayersId():
@@ -252,28 +333,26 @@ class Game(ndb.Model):
     def dialCardList(self, numberOfCards):
         deck = self.game_variables[CARDS_DECK]
         if len(deck)<numberOfCards:
-            deck.append(card.getDeckCardListStr(1, shuffle=True))
-            random.shuffle(deck)
+            deck.extend(card.getDeckCardListStr(1, shuffle=True))
+            #random.shuffle(deck)
         result = []
         for i in range(numberOfCards):
-            result.append(self.game_variables[CARDS_DECK].pop(0))
+            result.append(deck.pop(0))
         return result
 
     def setUpNextTurn(self, iterations=1):
-        self.game_variables[TURN_COUNT] += 1
-        self.game_variables[TURN_PLAYER_INDEX] = self.nextTurnPlayerIndex(iterations = iterations)
-        self.put()
-
-    def nextTurnPlayerIndex(self, iterations=1):
+        exlclude_ids = [self.getGodPlayerId(), self.getCurrentProphetId()]
+        logging.debug("Setting up next turn. Exluding ids: {}".format(exlclude_ids))
         number_of_players = self.getNumberOfSeats()
         index = self.getPlayerTurnIndex()
         for i in range(iterations):
-            index = (index + 1) % number_of_players
-            p_id = self.getPlayersId()[index]
-            if self.getGodPlayerId() == p_id:
-            #if p_id in [self.getGodPlayerId(), self.getCurrentProphet()]:
+            while True:
                 index = (index + 1) % number_of_players
-        return index
+                p_id = self.getPlayersId()[index]
+                if p_id not in exlclude_ids:
+                    break
+        self.game_variables[TURN_PLAYER_INDEX] = index
+        self.put()
 
     def readyToStart(self):
         return len(self.getPlayersId()) == self.number_seats
@@ -303,7 +382,7 @@ class Game(ndb.Model):
         c = card.reprCardFromRender(card_emoji)
         return c in self.getSinglePlayerCards(p_id)
 
-    def appendInProposedCardsAndRemoveFromHand(self, card_emoji):
+    def appendInProposedCardsAndRemoveFromHand(self, card_emoji, put=True):
         p_id = self.getCurrentPlayerId()
         c = card.reprCardFromRender(card_emoji)
         players_card = self.getSinglePlayerCards(p_id)
@@ -311,7 +390,8 @@ class Game(ndb.Model):
             return False
         players_card.remove(c)
         self.getProposedCards().append(c)
-        self.put()
+        if put:
+            self.put()
         return True
 
     def returnProposedCardsToPlayer(self):
@@ -321,34 +401,54 @@ class Game(ndb.Model):
         self.emptyProposedCards()
         self.put()
 
+    def returnLastProposedCardToPlayer(self):
+        p_id = self.getCurrentPlayerId()
+        proposed_cards = self.getProposedCards()
+        lastProposed = proposed_cards.pop()
+        self.getSinglePlayerCards(p_id).append(lastProposed)
+        self.put()
+
     def getAcceptedCards(self):
         return self.game_variables[ACCEPTED_CARDS]
 
     def getRejectedCards(self):
         return self.game_variables[REJECTED_CARDS]
 
-    def acceptProposedCards(self, put=False):
-        proposed_cards = self.getProposedCards()
-        self.game_variables[CARDS_ON_TABLE] += len(proposed_cards)
-        self.getAcceptedCards().extend(proposed_cards)
-        for i in range(len(proposed_cards)):
-            self.getRejectedCards().append([])
+    def acceptProposedCards(self, prophetDecision=False, put=False):
+        for c in self.getProposedCards():
+            self.acceptSingleCard(c, prophetDecision)
         self.emptyProposedCards()
         if put:
             self.put()
 
-    def rejectProposedCardsAndGetPenalityCards(self, put=False):
+    def acceptSingleCard(self, card, prophetDecision=False):
+        self.getAcceptedCards().append(card)
+        self.getRejectedCards().append([])
+        self.increaseCardsOnTableCount(1)
+        if prophetDecision:
+            self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS][0] += 1
+
+    def rejectProposedCards(self, prophetDecision=False, getPenaltyCards = True):
         proposed_cards = list(self.getProposedCards()) #copy
-        self.game_variables[CARDS_ON_TABLE] += len(proposed_cards)
-        #logging.debug("rejecting cards: {}".format(proposed_cards))
+        number_proposed_cards = len(proposed_cards)
+        self.increaseCardsOnTableCount(len(proposed_cards))
         p_id = self.getCurrentPlayerId()
         self.getRejectedCards()[-1].append(proposed_cards)
-        newCardsNumber = 2 * len(proposed_cards)
+        self.emptyProposedCards()
+        if prophetDecision:
+            self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS][1] += number_proposed_cards
+        if getPenaltyCards:
+            newCardsNumber = 2 * number_proposed_cards
+            newCards = self.dialCardList(newCardsNumber)
+            self.getSinglePlayerCards(p_id).extend(newCards)
+            return [card.renderCardFromRepr(c) for c in newCards]
+
+    def overthrownProphetAndGivePenaltyCards(self):
+        p_id = self.getCurrentProphetId()
+        newCardsNumber = parameters.CARDS_PENALTY_PROPHET
         newCards = self.dialCardList(newCardsNumber)
         self.getSinglePlayerCards(p_id).extend(newCards)
-        self.emptyProposedCards()
-        if put:
-            self.put()
+        self.setCurrentProphetId(None)
         return [card.renderCardFromRepr(c) for c in newCards]
 
     def confirmNoPlay(self, put=False):
@@ -362,21 +462,19 @@ class Game(ndb.Model):
         if put:
             self.put()
 
-    def rejectNoPlay(self, card_emoji, put=False):
+    def rejectNoPlay(self, card_emoji, prophetDecision=False, put=False):
         p_id = self.getCurrentPlayerId()
         c = card.reprCardFromRender(card_emoji)
-        self.game_variables[CARDS_ON_TABLE] += 1
         players_card = self.getSinglePlayerCards(p_id)
         if c not in players_card:
             return None
         players_card.remove(c)
-        self.getAcceptedCards().append(c)
-        self.getRejectedCards().append([])
+        self.acceptSingleCard(c, prophetDecision)
         newCards = self.dialCardList(parameters.CARDS_PENALTY_ON_INCORRECT_NO_PLAY)
         self.getSinglePlayerCards(p_id).extend(newCards)
         if put:
             self.put()
-        return newCards
+        return [card.renderCardFromRepr(c) for c in newCards]
 
     def checkIfCurrentPlayerCanBeProphet(self, checkIfAskedEnable, put):
         p_id = self.getCurrentPlayerId()
@@ -390,20 +488,37 @@ class Game(ndb.Model):
             self.put()
         return True
 
-    def setUpProphet(self):
-        p_id = self.getCurrentPlayerId()
-        self.setCurrentProphet(p_id)
-        self.getPlayesWhoHaveBeenProphet().append(p_id)
-
     def checkIfCurrentPlayerHasWon(self):
         p_id = self.getCurrentPlayerId()
         return len(self.getSinglePlayerCards(p_id))==0
+
+    def computeScores(self):
+        maxCardsHand = max([len(x) for x in self.getPlayersCards().values()])
+        for p_id in self.getPlayersId(excludingGod=True):
+            cardsPlayer = len(self.getSinglePlayerCards(p_id))
+            basePoints = maxCardsHand - cardsPlayer
+            if cardsPlayer==0:
+                basePoints += 4
+            self.game_variables[PLAYERS_SCORES][p_id][0] = basePoints
+        prophet_id = self.getCurrentProphetId()
+        if prophet_id:
+            prophet_accepted, prophet_rejected = self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS]
+            prophet_extra_points = prophet_accepted + 2 * prophet_rejected
+            self.game_variables[PLAYERS_SCORES][prophet_id][0] += prophet_extra_points
+        max_points = max([x[0] for x in self.game_variables[PLAYERS_SCORES].values()])
+        self.game_variables[PLAYERS_SCORES][self.getGodPlayerId()][0] = max_points
+        result_table = [['NAME', 'HAND', 'TOTAL']]
+        for p_id in self.getPlayersId():
+            player_scores = self.game_variables[PLAYERS_SCORES][p_id]
+            player_scores[1] += player_scores[0]
+            result_table.append([self.getPlayerName(p_id), str(player_scores[0]), str(player_scores[1])])
+        return result_table
 
 
 def gameExists(name):
     return Game.get_by_id(name) != None
 
-def createGame(name, number_seats, public=False, put=False):
+def createGame(name, number_seats, demoMode=False, public=False, put=False):
     g = Game.get_by_id(name)
     if g == None:
         g = Game(id=name)
@@ -426,6 +541,12 @@ def deleteGame(game):
 def populatePublicGames():
     for game, info in parameters.PUBLIC_GAME_ROOMS_INFO.iteritems():
         createGame(game, info['PLAYERS'], public=True, put=True)
+
+
+def resetPublicGames():
+    publicGames = Game.query(Game.public == True).fetch()
+    for g in publicGames:
+        g.resetGame()
 
 def deleteAllPrivateGames():
     create_futures = ndb.delete_multi_async(

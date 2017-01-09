@@ -8,14 +8,13 @@ FONT_SIZE = 20
 FONT = ImageFont.truetype("fonts/Symbola.ttf",FONT_SIZE)
 
 MARGIN = 15
-COLUMN_WIDTH = 100
+COLUMN_WIDTH = 120
 ROW_HEIGHT = 30
 TEXT_HEIGHT = FONT.getsize('M')[1]
 
 def getResultImage(result_table, show=False):
     NUMBER_ROWS = len(result_table)
     NUMBER_COLUMNS = len(result_table[0])
-    # NUMBER_COLUMNS = 5 # columns: names, bpo_disguising_rewards, detective_rewards, critic_disguising_reward, total
     WIDTH = MARGIN * 2 + NUMBER_COLUMNS * COLUMN_WIDTH
     HEIGHT = MARGIN * 2 + TEXT_HEIGHT + NUMBER_ROWS * ROW_HEIGHT
     img = Image.new("RGBA", (WIDTH, HEIGHT), (255, 255, 255))

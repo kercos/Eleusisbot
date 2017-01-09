@@ -30,6 +30,8 @@ import jsonUtil
 import utility
 import parameters
 import render_results
+import autorule
+import date_time_util
 
 ########################
 WORK_IN_PROGRESS = False
@@ -37,12 +39,15 @@ WORK_IN_PROGRESS = False
 
 STATES = {
     1:   'Start State',
+    10:  'Demo Mode',
     20:  'Game Lobby',
     30:  'Game: God rule',
     31:  'Game: God Chooses Starter',
     32:  'Game: player turn',
     33:  'Game: God or Prophet judges proposed card(s)',
+    331:  'Game: God judges Prophet on proposed card(s)',
     34:  'Game: God or Prophet judges NO-PLAY',
+    341:  'Game: God judges Prophet on NO-PLAY',
     35:  'Ask to be a prophet'
 }
 
@@ -394,34 +399,80 @@ def repeatState(p, put=False, **kwargs):
 # GAME FUNCTIONS
 # ================================
 
-def terminateGame(g, msg=''):
-    broadcastGameBoardPlayers(g)
-    person.setGameRoomMulti(g.getPlayersId(), None)
-    if msg:
+def terminateHand(g, expired=False, forcedExitName=None, personWon=True):
+    if expired or forcedExitName:
+        if expired:
+            msg = "{} The game has terminated because it has been idle for too long".format(icons.TIME_ICON)
+        else: #forcedExitName
+            msg = "The game has terminated because {} exited.".format(forcedExitName)
         broadcastMsgToPlayers(g, msg)
-    redirectPlayersToState(g, 1)
-    if g.isPublic():
-        g.resetGame()
+        redirectPlayersToState(g, 1)
+        g.resetOrDeleteGame()
+        return
+    msg = ''
+    if g.isDemoMode():
+        p_id = g.getCurrentPlayerId()
+        p = person.getPersonById(p_id)
+        if personWon:
+            ruleDescription = autorule.getRuleDescription(g.getGodRule())
+            levelStr = "the random lavel" if p.reachedMaxLevel() else "level {}".format(p.getDemoLevel())
+            demoMsg = "{0} You won {1}!! {0}\n\n" \
+                      "{2} The *secret rule* of the game was:\n{3}".format(
+                icons.TROPHY, levelStr, icons.KEY, utility.escapeMarkdown(ruleDescription))
+            p.increaseDemoLevel()
+        else:
+            demoMsg = "😩 You have lost... but you can try again 🤗"
+        tell(p_id, demoMsg)
+        redirectToState(p, 10)
+        g.resetOrDeleteGame()
     else:
-        game.deleteGame(g)
+        if personWon is False:
+            msg += "Game has terminated since all players have been eliminated!\n\n"
+        msg = "{} The *secret rule* of the game was:\n{}".format(icons.KEY, utility.escapeMarkdown(g.getGodRule()))
+        broadcastMsgToPlayers(g, msg)
+        broadcastGameBoardPlayers(g)
+        broadcastGameResultTableToPlayers(g)
+        if g.checkIfCurrentPlayerHasWon():
+            handWinnerMsg = "{0} {1} has won the current hand!! {0}".format(icons.TROPHY, g.getCurrentPlayerName())
+            broadcastMsgToPlayers(g, handWinnerMsg)
+        if g.allHandsHaveBeenPlayed():
+            finalWinnerMsg = "{} The winner of the game is {}! {}".format(
+                icons.TROPHY*3, g.getFinalWinnerName(), icons.TROPHY*3)
+            broadcastMsgToPlayers(g, finalWinnerMsg)
+            redirectPlayersToState(g, 1)
+            g.resetOrDeleteGame()
+        else:
+            g.initNextHand()
+            redirectPlayersToState(g, 30)
 
-def broadcastMsgToPlayers(g, msg, kb=None, exclude = None):
+def broadcastMsgToPlayers(g, msg, kb=None, exclude = ()):
     for id in g.getPlayersId():
-        if id != exclude:
+        if id not in exclude:
             tell(id, msg, kb, sleepDelay=True)
 
-def broadcastCardsToPlayers(g, exclusion_player_id):
+def broadcastCardsToPlayers(g, exclude = ()):
     for p_id in g.getPlayersId(excludingGod=True):
-        if p_id ==  exclusion_player_id:
-            continue
-        msg = "Here are your cards."
-        cards = g.getSinglePlayerCards(p_id, emoji=True)
-        kb = utility.distributeElementMaxSize(cards, maxSize = parameters.CARDS_PER_ROW)
-        tell(p_id, msg, kb)
+        if p_id not in exclude:
+            msg = "Here are your cards."
+            cards = g.getSinglePlayerCards(p_id, emoji=True)
+            kb = utility.distributeElementMaxSize(cards, maxSize = parameters.CARDS_PER_ROW)
+            tell(p_id, msg, kb)
 
 def broadcastGameBoardPlayers(g):
     import render_game_board
     file_data = render_game_board.render(g)
+    for id in g.getPlayersId():
+        sendPhotoData(id, file_data, 'board.png')
+        sleep(0.1)
+
+def broadcastWaitingActionToPlayers(g, exclude = (), sleep_time=None):
+    for chat_id in g.getPlayersId():
+        if chat_id not in exclude:
+            sendWaitingAction(chat_id, sleep_time = sleep_time)
+
+def broadcastGameResultTableToPlayers(g):
+    result_table = g.computeScores()
+    file_data = render_results.getResultImage(result_table)
     for id in g.getPlayersId():
         sendPhotoData(id, file_data, 'results.png')
         sleep(0.1)
@@ -431,27 +482,23 @@ def redirectPlayersToState(g, new_state, **kwargs):
         p = person.getPersonById(id)
         redirectToState(p, new_state, **kwargs)
 
-#def sendPlayersWaitingAction(g, sleep_time=None):
-#    for chat_id in g.getPlayersId():
-#        sendWaitingAction(chat_id, sleep_time = sleep_time)
-
 # ================================
 # GO TO STATE 1: Initial Screen
 # ================================
 def goToState1(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     giveInstruction = input is None
-    kb = [[icons.SINGLE_PLAYER_GAME], [icons.MULTI_PLAYER_GAME],[icons.INFO]]
+    kb = [[icons.DEMO_MODE], [icons.MULTI_PLAYER_GAME], [icons.INFO]]
     if giveInstruction:
         msg = 'Press {} if you want to play against the computer or ' \
               '{} if you want to enter a multi-player game'.format(
-            icons.SINGLE_PLAYER_GAME, icons.MULTI_PLAYER_GAME)
+            icons.DEMO_MODE, icons.MULTI_PLAYER_GAME)
         tell(p.chat_id, msg, kb)
     else:
         if input in [icons.INFO]:
             tell(p.chat_id, messages.INSTRUCTIONS)
-        elif input == icons.SINGLE_PLAYER_GAME:
-            tell(p.chat_id, "{} Not yer implemented".format(icons.UNDER_CONSTRUCTION))
+        elif input == icons.DEMO_MODE:
+            redirectToState(p, 10)
         elif input == icons.MULTI_PLAYER_GAME:
             redirectToState(p, 20)
         elif p.chat_id in key.MASTER_CHAT_ID:
@@ -469,6 +516,55 @@ def goToState1(p, **kwargs):
                 tell(p.chat_id, messages.NOT_VALID_INPUT, kb=kb)
         else: # including input == ''
             tell(p.chat_id, messages.NOT_VALID_INPUT, kb=kb)
+
+# ================================
+# GO TO STATE 10: Demo Mode
+# ================================
+def goToState10(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    giveInstruction = input is None
+    level = p.getDemoLevel()
+    reachedMaxLevel = p.reachedMaxLevel()
+    RANDOM_PLAY_BUTTON = "🎯 RANDOM LEVEL"
+    LEVEL_PLAY_BUTTON = "🎯 PLAY LEVEL {}".format(level)
+    FIRST_BUTTON = RANDOM_PLAY_BUTTON if reachedMaxLevel else LEVEL_PLAY_BUTTON
+    if giveInstruction:
+        kb = [[FIRST_BUTTON], [icons.BACK]]
+        if reachedMaxLevel:
+            msg = '👏 You reached the last level of the game!\n\n' \
+                  'Stay tuned for new levels. In the meantime you can play in *random mode*.'
+        elif level==1:
+            msg = "You can use this mode to practise with several Eleusis rules " \
+                  "with increasing levels of complexity.\n\n" \
+                  "You can now start with *level 1*."
+        else:
+            msg = 'You reached *level {}*!'.format(p.getDemoLevel())
+        tell(p.chat_id, msg, kb)
+    else:
+        if input == FIRST_BUTTON:
+            if reachedMaxLevel:
+                msg = 'Initializing random level'
+            else:
+                msg = 'Initializing level {}'.format(level)
+            tell(p.chat_id, msg)
+            sendWaitingAction(p.chat_id)
+            while True:
+                gameRoomName = 'Demo Mode - {} - {} - {}'.format(
+                    level, p.getFirstName(), date_time_util.datetimeStringCET(seconds=True))
+                g = game.createGame(gameRoomName, 1)
+                if g == None:  # already present
+                    sleep(1)
+                else:
+                    break
+            g.addPlayer(p, put=False)
+            autorule.initializeDemoGame(g, level)
+            broadcastGameBoardPlayers(g)
+            logging.debug("Redirecting to 32")
+            redirectToState(p, 32)
+        elif input == icons.BACK:
+            redirectToState(p, 1)
+        else: # including input == ''
+            tell(p.chat_id, messages.NOT_VALID_INPUT)
 
 # ================================
 # GO TO STATE 20: Game Lobby
@@ -571,15 +667,16 @@ def goToState22(p, **kwargs):
     if giveInstruction:
         msg = "Entering the game *{}*".format(g.getGameRoomName())
         tell(p.chat_id, msg, remove_keyboard=True)
-        broadcastMsgToPlayers(g, "Player {} joined the game!".format(p.getFirstName()))
+        msgPlayerJoined = "Player {} joined the game!".format(p.getFirstName())
+        broadcastMsgToPlayers(g, msgPlayerJoined)
         if g.readyToStart():
-            msg = "All seats have been occupied! Setting up the game..."
-            broadcastMsgToPlayers(g, msg)
-            g.initializeCardsDeck()
+            msgSeatsOccupied = "All seats have been occupied! Setting up the game..."
+            broadcastMsgToPlayers(g, msgSeatsOccupied)
+            g.initGame()
             redirectPlayersToState(g, 30)
         else:
-            msg = "Waiting for {} other players...".format(g.remainingSeats())
-            broadcastMsgToPlayers(g, msg)
+            msgWaitingForPlayers = "Waiting for {} other players...".format(g.remainingSeats())
+            broadcastMsgToPlayers(g, msgWaitingForPlayers)
     else:
         msg = "{} Please wait for the other players to join the game.".format(icons.EXCLAMATION_ICON)
         tell(p.chat_id, msg)
@@ -592,24 +689,26 @@ def goToState30(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     g = p.getGame()
     giveInstruction = input is None
-    god_id, god_name = g.getGodPlayerIdAndName()
+    god_id, god_name = g.getGodIdAndName()
     isGod = p.chat_id == god_id
     if giveInstruction:
+        msg = "{} *HAND {}*\n\n".format(icons.HAND, g.getHandNumber())
         if isGod:
-            msg = "*You are God!*\n" \
+            msg += "*You are God!*\n" \
                   "{} Please write down the secret rule of the game as clearly as possible.".format(icons.EYES)
         else:
-            msg = "The God of this game is {}. S/he is writing down the secret rule of the game...".format(god_name)
+            msg += "The God of this hand is {}.\n" \
+                  "{} S/he is writing down the secret rule of the game...".format(god_name, icons.KEY)
         tell(p.chat_id, msg)
+        #broadcastWaitingActionToPlayers(g, exclude=[god_id])
     else:
         if isGod:
             if input == '':
                 tell(p.chat_id, messages.NOT_VALID_INPUT)
             else:
                 g.setGodRule(input)
-                msg = "👍 Great, God has chosen the rule!"
-                broadcastMsgToPlayers(g, msg)
-                #sendPlayersWaitingAction(g, sleep_time=1)
+                msgChosenRule = "👍 Great, God has chosen the rule!"
+                broadcastMsgToPlayers(g, msgChosenRule)
                 redirectPlayersToState(g, 31)
         else:
             msg = "{} Please wait for {} to choose the secret rule.".format(icons.EXCLAMATION_ICON, god_name)
@@ -622,15 +721,16 @@ def goToState31(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     g = p.getGame()
     giveInstruction = input is None
-    god_id, god_name = g.getGodPlayerIdAndName()
+    god_id, god_name = g.getGodIdAndName()
     isGod = p.chat_id == god_id
     god_kb = [[icons.YES_BUTTON, icons.NO_BUTTON]]
     if giveInstruction:
         if isGod:
             nextDeckCard = g.getNextStartingCard()
-            msg = "You need to select the starting card.\n" \
+            msg = "You need to select the starting card.\n\n" \
                   "{} Is {} a good starting card?".format(icons.EYES, nextDeckCard)
             tell(p.chat_id, msg, kb=god_kb)
+            #broadcastWaitingActionToPlayers(g, exclude=[god_id])
         else:
             msg = "The God is choosing the starting card...".format(god_name)
             tell(p.chat_id, msg)
@@ -638,16 +738,16 @@ def goToState31(p, **kwargs):
         if isGod:
             if input == icons.NO_BUTTON:
                 nextDeckCard = g.getNextStartingCard()
-                msg = "Ok, let's try with next one.\nIs {} a good starting card?".format(nextDeckCard)
+                msg = "Ok, let's try with next one.\n{} Is {} a good starting card?".format(icons.EYES, nextDeckCard)
                 tell(p.chat_id, msg, kb=god_kb)
             elif input == icons.YES_BUTTON:
                 g.acceptStartingCard()
                 broadcastGameBoardPlayers(g)
-                msg = "👍 Great, God has chosen the starting card {}!\nThe game can now start!".format(g.getStartingCard(emoji=True))
-                broadcastMsgToPlayers(g, msg)
-                #sendPlayersWaitingAction(g)
+                msgChosenStartingCard = "👍 Great, God has chosen the starting card: {}\n\n" \
+                                        "The game hand can now start!".format(g.getStartingCard(emoji=True))
+                broadcastMsgToPlayers(g, msgChosenStartingCard)
                 g.startGame()
-                broadcastCardsToPlayers(g, exclusion_player_id = g.getCurrentPlayerId())
+                broadcastCardsToPlayers(g, exclude = [g.getCurrentPlayerId()])
                 redirectPlayersToState(g, 32)
             else:
                 tell(p.chat_id, messages.NOT_VALID_INPUT)
@@ -664,13 +764,13 @@ def goToState32(p, **kwargs):
     continuation = kwargs['continuation'] if 'continuation' in kwargs.keys() else False
     g = p.getGame()
     giveInstruction = input is None
-    god_id, god_name = g.getGodPlayerIdAndName()
+    god_id, god_name = g.getGodIdAndName()
     isGod = p.chat_id == god_id
     currentPlayerId, currentPlayerName = g.getCurrentPlayerIdAndName()
     isPlayerTurn = p.chat_id == currentPlayerId
     selected_cards = g.getProposedCards(emoji=True)
-    players_command_buttons = [icons.SUBMIT_CARDS_BUTTON, icons.EMPTY_SELECTION_BUTTON] if selected_cards else [icons.NO_PLAY_BUTTON]
-    players_enabled_prophet = None
+    players_command_buttons = [icons.SUBMIT_CARDS_BUTTON, icons.EMPTY_SELECTION_BUTTON, icons.REMOVE_LAST_CARD] if selected_cards else [icons.NO_PLAY_BUTTON]
+    players_enabled_prophet = []
     if g.checkIfCurrentPlayerCanBeProphet(checkIfAskedEnable=False, put=False):
         players_enabled_prophet = [icons.ASK_ME_TO_BE_A_PROPHET_ENABLED] if g.getPlayerAskToBeAProphet(currentPlayerId) else [icons.ASK_ME_TO_BE_A_PROPHET_DISABLED]
     if giveInstruction:
@@ -694,23 +794,27 @@ def goToState32(p, **kwargs):
                       "or press {} if you think you have no card to play.".format(icons.EYES, icons.NO_PLAY_BUTTON)
             tell(p.chat_id, msg, player_kb)
         else:
-            msg = "It's {}'s turn. Let's wait for him/her to choose a card...".format(currentPlayerName)
+            msg = "It's {}'s turn. Let's wait for him/her to propose some card(s)...".format(currentPlayerName)
             tell(p.chat_id, msg, remove_keyboard=isGod)
     else:
-        if isPlayerTurn:
-            if input in players_enabled_prophet:
-                enabled = g.flipPlayerAskToBeAProphet(currentPlayerId)
-                if enabled:
-                    msg = "{} After you play, you will be asked if you want to be a Prophet.".format(icons.CHECK)
-                else:
-                    msg = "{} After you play, you won't be asked if you want to be a Prophet.".format(icons.CANCEL)
-                tell(p.chat_id, msg)
-                repeatState(p)
-            elif input in players_command_buttons:
+        if input in players_enabled_prophet:
+            enabled = g.flipPlayerAskToBeAProphet(currentPlayerId)
+            if enabled:
+                clause = " (if the current Prophet is overthrown)" if g.getCurrentProphetId() else ""
+                msg = "{} After you play, you will be asked if you want to be a Prophet{}.".format(icons.CHECK, clause)
+            else:
+                msg = "{} After you play, you won't be asked if you want to be a Prophet.".format(icons.CANCEL)
+            tell(p.chat_id, msg)
+            repeatState(p, continuation=True)
+        elif isPlayerTurn:
+            if input in players_command_buttons:
                 if input == icons.SUBMIT_CARDS_BUTTON:
                     redirectPlayersToState(g, 33)
                 elif input == icons.EMPTY_SELECTION_BUTTON:
                     g.returnProposedCardsToPlayer()
+                    repeatState(p)
+                elif input == icons.REMOVE_LAST_CARD:
+                    g.returnLastProposedCardToPlayer()
                     repeatState(p)
                 elif input == icons.NO_PLAY_BUTTON:
                     redirectPlayersToState(g, 34)
@@ -731,62 +835,159 @@ def goToState33(p, **kwargs):
     g = p.getGame()
     giveInstruction = input is None
     currentPlayerId, currentPlayerName = g.getCurrentPlayerIdAndName()
-    god_id, god_name = g.getGodPlayerIdAndName()
+    judge_id, judge_name, judge_isProphet = g.getCurrentJudgeIdNameIsProphet()
+    computer_god_no_prophet = judge_id is None
+    god_judge_str = "the Prophet" if judge_isProphet else "God"
     proposed_cards = g.getProposedCards(emoji=True)
     proposed_cards_str = ', '.join(proposed_cards)
-    isGod = p.chat_id == god_id
+    isHumanJudge = p.chat_id == judge_id
     isPlayerTurn = p.chat_id == currentPlayerId
-    god_kb = [[icons.YES_BUTTON, icons.NO_BUTTON]]
+    judge_kb = [[icons.YES_BUTTON, icons.NO_BUTTON]]
     if giveInstruction:
-        if isGod:
+        if isHumanJudge:
             msg = "{} has choosen the following card(s):\n\n{}\n\n" \
-                  "Do you accept it/them?".format(currentPlayerName, proposed_cards_str)
-            tell(god_id, msg, god_kb, one_time_keyboard=True)
+                  "{} Do you accept it/them?".format(currentPlayerName, proposed_cards_str, icons.EYES)
+            tell(judge_id, msg, judge_kb, one_time_keyboard=True)
         elif isPlayerTurn:
             cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
             player_kb = None
             if cards:
                 player_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
             msg = "You have choosen the following card(s):\n\n{}\n\n" \
-                  "Let's see if God accepts it.".format(proposed_cards_str)
-            tell(currentPlayerId, msg, player_kb)
+                  "Let's see if {} accepts it/them.".format(proposed_cards_str, god_judge_str)
+            tell(currentPlayerId, msg, player_kb, remove_keyboard = player_kb == None)
+            if computer_god_no_prophet:
+                accepted = autorule.areProposedCardsAccepted(g)
+                godAcceptanceCards(g, accepted, currentPlayerName, currentPlayerId)
         else:
             msg = "{} has choosen the following card(s):\n\n{}\n\n" \
-                  "Let's see if God accepts it.".format(currentPlayerName, proposed_cards_str)
+                  "Let's see what {} thinks...".format(currentPlayerName, proposed_cards_str, god_judge_str)
             tell(p.chat_id, msg)
     else:
+        if isHumanJudge:
+            if input in judge_kb[0]:
+                if judge_isProphet:
+                    g.setLastProphetDecision(input)
+                    accepted_3rd_str = "has accepted" if input == icons.YES_BUTTON else "has rejected"
+                    accepted_2nd_str = "have accepted" if input == icons.YES_BUTTON else "have rejected"
+                    icon = icons.CHECK if input == icons.YES_BUTTON else icons.CANCEL
+                    msgGodJudgeProphetOnCards = "{} The prophet {} the cards proposed by {}. " \
+                                                "Let's see what God thinks...".format(
+                        icon, accepted_3rd_str, currentPlayerName)
+                    broadcastMsgToPlayers(g, msgGodJudgeProphetOnCards, exclude=[judge_id])
+                    msgProphet = "{} You {} the cards proposed by {}. " \
+                                 "Let's see what God thinks...".format(
+                        icon, accepted_2nd_str, currentPlayerName)
+                    tell(judge_id, msgProphet)
+                    redirectPlayersToState(g, 331)
+                else: # GOD
+                    accepted = input==icons.YES_BUTTON
+                    godAcceptanceCards(g, accepted, currentPlayerName, currentPlayerId)
+            else:
+                tell(p.chat_id, messages.NOT_VALID_INPUT, kb=judge_kb)
+        else:
+            msg = "{} Please wait for {} to judge {}'s card.".format(icons.EXCLAMATION_ICON, god_judge_str, currentPlayerName)
+            tell(p.chat_id, msg)
+
+
+def godAcceptanceCards(g, accepted, currentPlayerName, currentPlayerId):
+    if accepted:
+        g.acceptProposedCards()
+        msg = "{} God has accepted the card(s) proposed by {}".format(icons.CHECK, currentPlayerName)
+        broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+        msgPlayer = "{} God has accepted the card(s) you proposed!".format(icons.CHECK)
+        tell(currentPlayerId, msgPlayer)
+        if checkIfCurrentPlayerHasWonAndTerminateHand(g):
+            return
+    else:
+        newCards = g.rejectProposedCards()
+        newCards_str = ', '.join(newCards)
+        msg = "{} God has rejected the card(s) proposed by {} who gets {} new penalty cards.".format(
+            icons.CANCEL, currentPlayerName, len(newCards))
+        broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+        msgPlayer = "{} God has rejected the card(s) you proposed. You will get {} new penalty cards: {}".format(
+            icons.CANCEL, len(newCards), newCards_str)
+        updateCurrentPlayerCards(g, msgPlayer)
+        if checkIfPlayerIsEliminatedAndTerminateHand(g):
+            return
+    broadcastGameBoardPlayers(g)
+    askToBeAProphetOrGoToNextTurn(g)
+
+# ================================
+# GO TO STATE 331: Game: God judges Prophet on card acceptence
+# ================================
+def goToState331(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    g = p.getGame()
+    giveInstruction = input is None
+    god_id, god_name = g.getGodIdAndName()
+    currentPlayerId, currentPlayerName = g.getCurrentPlayerIdAndName()
+    isGod = p.chat_id == god_id
+    prophetId = g.getCurrentProphetId()
+    prophetDecision = g.getLastProphetDecision()
+    accepted_rejected_str = "accepted" if prophetDecision == icons.YES_BUTTON else "rejected"
+    accepted_rejected_inv_str = "rejected" if prophetDecision==icons.YES_BUTTON else "accepted"
+    CONFIRM_EXPLANATION_BUTTON = icons.YES_BUTTON + ": card(s) were correctly {}".format(accepted_rejected_str)
+    NO_EXPLANATION_BUTTON = icons.NO_BUTTON + ": card(s) should have been {}".format(accepted_rejected_inv_str)
+    god_kb = [[CONFIRM_EXPLANATION_BUTTON], [NO_EXPLANATION_BUTTON]]
+    if giveInstruction:
         if isGod:
-            if input in god_kb[0]:
-                if input == icons.YES_BUTTON:
-                    g.acceptProposedCards()
-                    msg = "{} God has accepted the following card(s)\n\n{}\n\nproposed by {}".format(icons.CHECK, proposed_cards_str, currentPlayerName)
-                    broadcastMsgToPlayers(g, msg)
-                    if checkIfCurrentPlayerHasWon(g):
+            msg = "{} Do you agree with the Prophet?".format(icons.EYES)
+            tell(p.chat_id, msg, kb=god_kb, one_time_keyboard=True)
+    else:
+        logging.debug("Input: {}\nAccepted input: {}".format(input, CONFIRM_EXPLANATION_BUTTON))
+        if isGod:
+            if input == CONFIRM_EXPLANATION_BUTTON:
+                if prophetDecision == icons.YES_BUTTON:
+                    g.acceptProposedCards(prophetDecision=True)
+                    msg = "{} God agrees with the Prophet's decision " \
+                          "of accepting the cards proposed by {}.".format(icons.CHECK, currentPlayerName)
+                    broadcastMsgToPlayers(g, msg, exclude=[prophetId, currentPlayerId])
+                    msgProphet = "{} God agrees with your decision " \
+                          "of accepting the cards proposed by {}.".format(icons.CHECK, currentPlayerName)
+                    tell(prophetId, msgProphet)
+                    msgPlayer = "{} God agrees with the Prophet's decision " \
+                          "of accepting your cards.".format(icons.CHECK)
+                    tell(currentPlayerId, msgPlayer)
+                    if checkIfCurrentPlayerHasWonAndTerminateHand(g):
                         return
-                elif input == icons.NO_BUTTON:
-                    newCards = g.rejectProposedCardsAndGetPenalityCards()
-                    newCards_str = ', '.join(newCards)
-                    msg = "{} God has rejected the following card(s)\n\n{}\n\n" \
-                          "proposed by {} who gets {} extra cards.".format(
-                        icons.CANCEL, proposed_cards_str, currentPlayerName, len(newCards))
-                    broadcastMsgToPlayers(g, msg)
-                    msg = "Your new cards: {}".format(newCards_str)
-                    player_kb = None
-                    cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
-                    if cards:
-                        player_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
-                    tell(currentPlayerId, msg, kb = player_kb)
-                    if checkIfPlayerIsEliminatedAndTerminateGame(g):
+                else: # prophetDecision == icons.NO_BUTTON:
+                    penaltyCards = g.rejectProposedCards(prophetDecision=True)
+                    penaltyCards_str = ', '.join(penaltyCards)
+                    msg = "{} God agress with the Prophet's decision " \
+                          "of rejecting the cards proposed by {} " \
+                          "who gets {} new penalty cards.".format(icons.CHECK, currentPlayerName, len(penaltyCards))
+                    broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+                    msgPlayer = "{} God agress with the Prophet's decision " \
+                          "of rejecting the cards you proposed. " \
+                          "You will get {} new penalty cards: {}".format(icons.CHECK, len(penaltyCards), penaltyCards_str)
+                    updateCurrentPlayerCards(g, msgPlayer)
+                    if checkIfPlayerIsEliminatedAndTerminateHand(g):
+                        return
+            elif input == NO_EXPLANATION_BUTTON:
+                if prophetDecision == icons.YES_BUTTON:
+                    g.rejectProposedCards(prophetDecision=True, getPenaltyCards=False)
+                    msg = "{} God disagrees with the Prophet's decision " \
+                          "of accepting the cards proposed by {} ." \
+                          "who won't get any penalty cards.".format(icons.CANCEL, currentPlayerName)
+                    overthrowProphet(g, msg, playerWasWrong=True)
+                    if checkIfPlayerIsEliminatedAndTerminateHand(g):
                         return
                 else:
-                    tell(p.chat_id, messages.NOT_VALID_INPUT)
-                    return
-                broadcastGameBoardPlayers(g)
-                prophetCheckProcedure(g)
+                    g.acceptProposedCards()
+                    msg = "{} God disagrees with the Prophet's decision " \
+                          "of rejecting the cards proposed by {}, " \
+                          "which was/were in facat correct!".format(icons.CANCEL, currentPlayerName)
+                    overthrowProphet(g, msg, playerWasWrong=False)
+                    if checkIfCurrentPlayerHasWonAndTerminateHand(g):
+                        return
             else:
                 tell(p.chat_id, messages.NOT_VALID_INPUT, kb=god_kb)
+                return
+            broadcastGameBoardPlayers(g)
+            askToBeAProphetOrGoToNextTurn(g)
         else:
-            msg = "{} Please wait for God to judge {}'s card.".format(icons.EXCLAMATION_ICON, currentPlayerName)
+            msg = "{} Please wait for {} to judge the Prophet's decision.".format(icons.EXCLAMATION_ICON, god_name)
             tell(p.chat_id, msg)
 
 # ================================
@@ -796,67 +997,248 @@ def goToState34(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     g = p.getGame()
     giveInstruction = input is None
-    god_id, god_name = g.getGodPlayerIdAndName()
+    currentPlayerId, currentPlayerName = g.getCurrentPlayerIdAndName()
+    judge_id, judge_name, judge_isProphet = g.getCurrentJudgeIdNameIsProphet()
+    god_judge_str = "the Prophet" if judge_isProphet else "God"
+    isHumanJudge = p.chat_id == judge_id
+    isPlayerTurn = p.chat_id == currentPlayerId
+    computer_god_no_prophet = judge_id is None
+    if giveInstruction:
+        if isHumanJudge:
+            cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
+            judge_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
+            judge_kb.insert(0, [icons.CONFIRM_NO_PLAY_BUTTON])
+            p.setLastKeyboard(judge_kb)
+            msg = "{} claims s/he has no card to play.\n\n" \
+                  "{} Please confirm the NO PLAY or select a card which can be played.".format(currentPlayerName, icons.EYES)
+            tell(p.chat_id, msg, kb=judge_kb, one_time_keyboard=True)
+        elif isPlayerTurn:
+            cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
+            player_kb = None
+            if cards:
+                player_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
+            msg = "You claim you have no card to play.\n\n" \
+                  "Let's see what {} thinks...".format(god_judge_str)
+            tell(currentPlayerId, msg, player_kb)
+            if computer_god_no_prophet:
+                alternative_card = autorule.selectOneAcceptedCard(g)
+                godAcceptanceNoPlay(g, alternative_card, currentPlayerName, currentPlayerId)
+        else:
+            msg = "{} claims s/he has no card to play.\n\n" \
+                  "Let's see what {} thinks...".format(currentPlayerName, god_judge_str)
+            tell(p.chat_id, msg)
+    else:
+        if isHumanJudge:
+            if judge_isProphet:
+                g.setLastProphetDecision(input)
+                if input == icons.CONFIRM_NO_PLAY_BUTTON:
+                    msg = "{} The Prophet agrees that {} has no cards to play.\n\n" \
+                          "Let's see what God thinks...".format(icons.CHECK, currentPlayerName)
+                    msgPlayer = "{} The Prophet agrees that you have no cards to play.\n\n" \
+                          "Let's see what God thinks...".format(icons.CHECK)
+                elif g.isValidCard(input):
+                    msg = "{} The Prophet does NOT think that {} has no cards to play, " \
+                          "and claims that {} is a perfectly valid card.\n\n" \
+                          "Let's see what God thinks...".format(
+                        icons.CANCEL, currentPlayerName, input)
+                    msgPlayer = "{} The Prophet does NOT think that you have no cards to play, " \
+                          "and claims that {} is a perfectly valid card.\n\n" \
+                          "Let's see what God thinks...".format(
+                        icons.CANCEL, currentPlayerName, input)
+                else:
+                    tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
+                    return
+                broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+                tell(currentPlayerId, msgPlayer)
+                redirectPlayersToState(g, 341)
+            else:
+                if input == icons.CONFIRM_NO_PLAY_BUTTON or g.isValidCard(input):
+                    alternative_card = None if input == icons.CONFIRM_NO_PLAY_BUTTON else input
+                    godAcceptanceNoPlay(g, alternative_card, currentPlayerName, currentPlayerId)
+                else:
+                    tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
+        else:
+            msg = "{} Please wait for {} to judge the NO PLAY claim.".format(icons.EXCLAMATION_ICON, judge_name)
+            tell(p.chat_id, msg)
+
+def godAcceptanceNoPlay(g, alternative_card, currentPlayerName, currentPlayerId):
+    if alternative_card==None:
+        g.confirmNoPlay()
+        msg = "{} God agrees that {} has no card to play, " \
+              "so {} of his/her cards are discarded and all the rest are refreshed!".format(
+            icons.CHECK, currentPlayerName, parameters.CARDS_DISCOUNTED_ON_CORRECT_NO_PLAY)
+        broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+        msgPlayer = "{} God agrees that you have no card to play, " \
+              "so {} of your cards are discarded and all the rest are refreshed!".format(
+            icons.CHECK, parameters.CARDS_DISCOUNTED_ON_CORRECT_NO_PLAY)
+        updateCurrentPlayerCards(g, msgPlayer)
+        if checkIfCurrentPlayerHasWonAndTerminateHand(g):
+            return
+    else:
+        penaltyCards = g.rejectNoPlay(alternative_card)
+        penaltyCards_str = ', '.join(penaltyCards)
+        msg = "{0} God has rejected {1}'s claim that no card could be played, " \
+              "and declares that {2} is a perfectly valid card. " \
+              "{1} will get {3} additional penality cards.".format(
+            icons.CANCEL, currentPlayerName, alternative_card, len(penaltyCards))
+        broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+        msgPlayer = "{0} God has rejected your claim that no card could be played, " \
+              "and declares that {1} is a perfectly valid card. " \
+              "You will get {2} additional penality cards: {3}".format(
+            icons.CANCEL, alternative_card, len(penaltyCards), penaltyCards_str)
+        updateCurrentPlayerCards(g, msgPlayer)
+        if checkIfPlayerIsEliminatedAndTerminateHand(g):
+            return
+    broadcastGameBoardPlayers(g)
+    askToBeAProphetOrGoToNextTurn(g)
+
+
+# ================================
+# GO TO STATE 341: Game: God judges Prophet on no-play
+# ================================
+def goToState341(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    g = p.getGame()
+    giveInstruction = input is None
+    god_id, god_name = g.getGodIdAndName()
     currentPlayerId, currentPlayerName = g.getCurrentPlayerIdAndName()
     isGod = p.chat_id == god_id
+    lastProphetResponse = g.getLastProphetDecision()
+    no_play_confirmed_by_prophet = lastProphetResponse == icons.CONFIRM_NO_PLAY_BUTTON
+    if no_play_confirmed_by_prophet:
+        YES_EXPLANATION_BUTTON = icons.YES_BUTTON + ": no card could be played"
+        god_commands = [YES_EXPLANATION_BUTTON]
+    else:
+        YES_EXPLANATION_BUTTON = icons.YES_BUTTON + ": {} is a correct card".format(lastProphetResponse)
+        NO_EXPLANATION_BUTTON = icons.NO_BUTTON + ": {} had no valid cards".format(currentPlayerName)
+        god_commands = [NO_EXPLANATION_BUTTON, YES_EXPLANATION_BUTTON] #will be added in reverse
     if giveInstruction:
         if isGod:
             cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
+            if not no_play_confirmed_by_prophet:
+                cards.remove(lastProphetResponse)
             god_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
-            god_kb.insert(0, [icons.CONFIRM_NO_PLAY_BUTTON])
-            msg = "{} claims s/he has no card to play. " \
-                  "{} Please confirm the NO PLAY or select a card which can be played.".format(currentPlayerName, icons.EYES)
-            tell(p.chat_id, msg, kb=god_kb)
-        else:
-            msg = "{} claims s/he has no card to play. Let's see what God thinks.".format(currentPlayerName)
-            tell(p.chat_id, msg)
+            for c in god_commands:
+                god_kb.insert(0, [c])
+            p.setLastKeyboard(god_kb)
+            msg = "{} Do you agree with the Prophet?\n\n".format(icons.EYES)
+            if no_play_confirmed_by_prophet:
+                msg += "If you don't agree with the Prophet, " \
+                       "please select a valid card that could have been played below."
+            else:
+                msg += "If you don't agree with the Prophet because the chosen card is incorrect, " \
+                       "but there was another one that could have been played, please select it below."
+            tell(p.chat_id, msg, kb=god_kb, one_time_keyboard=True)
     else:
         if isGod:
-            if input == icons.CONFIRM_NO_PLAY_BUTTON:
-                g.confirmNoPlay()
-                msg = "God has confirmed {} has no cards to play, " \
-                      "so {} of his/her cards are discarded and all the rest are refreshed!".format(
-                    currentPlayerName, parameters.CARDS_DISCOUNTED_ON_CORRECT_NO_PLAY)
-                broadcastMsgToPlayers(g, msg)
-                if checkIfCurrentPlayerHasWon(g):
+            if input in god_commands:
+                if input == YES_EXPLANATION_BUTTON:
+                    if no_play_confirmed_by_prophet:
+                        g.confirmNoPlay()
+                        msg = "{} God agrees with the Prophet that {} has no card to play, " \
+                              "so {} of his/her cards are discarded and all the rest are refreshed!".format(
+                            icons.CHECK, currentPlayerName, parameters.CARDS_DISCOUNTED_ON_CORRECT_NO_PLAY)
+                        broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+                        msgPlayer = "{} God agrees with the Prophet that you has no card to play, " \
+                              "so {} of your cards are discarded and all the rest are refreshed!".format(
+                            icons.CHECK, parameters.CARDS_DISCOUNTED_ON_CORRECT_NO_PLAY)
+                        updateCurrentPlayerCards(g, msgPlayer)
+                        if checkIfCurrentPlayerHasWonAndTerminateHand(g):
+                            return
+                    else: #prophet picked a card
+                        penaltyCards = g.rejectNoPlay(lastProphetResponse, prophetDecision=True)
+                        penaltyCards_str = ', '.join(penaltyCards)
+                        msg = "{0} God agrees with the Prophet that {1} had some cards to play," \
+                              "and that {2} is a perfectly valid card. " \
+                              "{1} will get {3} additional penality cards.".format(
+                            icons.CHECK, currentPlayerName, lastProphetResponse, len(penaltyCards))
+                        broadcastMsgToPlayers(g, msg, exclude=[currentPlayerId])
+                        msgPlayer = "{0} God agrees with the Prophet that you had cards to play," \
+                              "and that {1} is a perfectly valid card. " \
+                              "You will get {2} additional penality cards: {}".format(
+                            icons.CHECK, lastProphetResponse, len(penaltyCards), penaltyCards_str)
+                        updateCurrentPlayerCards(g, msgPlayer)
+                        if checkIfPlayerIsEliminatedAndTerminateHand(g):
+                            return
+                else: # NO_EXPLANATION_BUTTON
+                    assert no_play_confirmed_by_prophet
+                    msg = "{} God disagrees with the Prophet, " \
+                          "and agrees with {} that no card could be played. ".format(icons.CANCEL, currentPlayerName)
+                    overthrowProphet(g, msg, playerWasWrong=False)
+                    if checkIfPlayerIsEliminatedAndTerminateHand(g):
+                        return
+            elif g.isValidCard(input) and input!=lastProphetResponse:
+                if no_play_confirmed_by_prophet:
+                    msg = "{} God disagrees with the Prophet that {} had no card to play," \
+                          "and declares that {} is a valid card.".format(
+                        icons.CANCEL, currentPlayerName, input)
+                else: #prophet picked a card
+                    msg = "{} God agrees with the Prophet that {} had at least a card to play, " \
+                          "but disagrees that {} is a valid card, and claims instead that {} is a valid card.".format(
+                        icons.CANCEL, currentPlayerName, lastProphetResponse, input)
+                g.appendInProposedCardsAndRemoveFromHand(input, put=False)
+                g.acceptProposedCards()
+                overthrowProphet(g, msg, playerWasWrong=True)
+                if checkIfPlayerIsEliminatedAndTerminateHand(g):
                     return
-            elif g.isValidCard(input):
-                penaltyCards = g.rejectNoPlay(input)
-                msg = "God has rejected {0}'s claim and declares that {1} is a perfectly valid card. " \
-                      "{0} will get {2} additional penality cards.".format(
-                    currentPlayerName, input, len(penaltyCards))
-                broadcastMsgToPlayers(g, msg)
             else:
-                tell(p.chat_id, messages.NOT_VALID_INPUT)
+                tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
                 return
             broadcastGameBoardPlayers(g)
-            prophetCheckProcedure(g)
+            askToBeAProphetOrGoToNextTurn(g)
         else:
-            msg = "{} Please wait for {} to judge the NO PLAY claim.".format(icons.EXCLAMATION_ICON, god_name)
+            msg = "{} Please wait for {} to judge the Prophet's decision.".format(icons.EXCLAMATION_ICON, god_name)
             tell(p.chat_id, msg)
 
-def checkIfCurrentPlayerHasWon(g):
+def updateCurrentPlayerCards(g, msg):
+    currentPlayerId = g.getCurrentPlayerId()
+    cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
+    if cards:
+        player_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
+        tell(currentPlayerId, msg, kb=player_kb)
+    else:
+        msg += '\n\nYou have no more cards!'
+        tell(currentPlayerId, msg, remove_keyboard=True)
+
+def overthrowProphet(g, msg, playerWasWrong):
+    currentProphetId, currentProphetName = g.getCurrentProphetIdAndName()
+    penaltyCards = g.overthrownProphetAndGivePenaltyCards()
+    penaltyCards_str = ', '.join(penaltyCards)
+    no_penalty_clause = "No penalty cards are given to {}.".format(g.getCurrentPlayerName())
+    msg += "\n\n{} The Prophet {} has been overthrown, " \
+           "and gets {} penalty cards.".format(
+        icons.THUMB_DOWN, currentProphetName, parameters.CARDS_PENALTY_PROPHET)
+    if playerWasWrong:
+        msg += '\n\n' + no_penalty_clause
+    broadcastMsgToPlayers(g, msg, exclude=[currentProphetId])
+    msgProphet = msg + "\n\nYour new cards: {}".format(penaltyCards_str)
+    cards = g.getSinglePlayerCards(currentProphetId, emoji=True)
+    prophet_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
+    tell(currentProphetId, msgProphet, kb=prophet_kb)
+
+def checkIfCurrentPlayerHasWonAndTerminateHand(g):
     if g.checkIfCurrentPlayerHasWon():
-        msg = "Player {} has won the game!!".format(g.getCurrentPlayerName())
-        terminateGame(g, msg)
+        terminateHand(g)
         return True
     return False
 
-def prophetCheckProcedure(g):
+def askToBeAProphetOrGoToNextTurn(g):
     if g.checkIfCurrentPlayerCanBeProphet(checkIfAskedEnable=True, put=True):
         redirectPlayersToState(g, 35)
     else:
         g.setUpNextTurn()
         redirectPlayersToState(g, 32)
 
-def checkIfPlayerIsEliminatedAndTerminateGame(g):
+def checkIfPlayerIsEliminatedAndTerminateHand(g):
     if g.isSuddenDeath():
         g.setCurrentPlayerEliminated()
-        msg = "{} has been eliminated!".format(g.getCurrentPlayerName())
-        broadcastMsgToPlayers(g, msg)
+        p_id, p_name = g.getCurrentPlayerIdAndName()
+        msg = "{} has been eliminated!".format(p_name)
+        broadcastMsgToPlayers(g, msg, exclude=[p_id])
+        msgPlayer = "You have been eliminated!"
+        tell(p_id, msgPlayer, remove_keyboard=True)
         if g.areAllPlayersEliminated():
-            msg = "Game has terminated since all players have been eliminated!"
-            terminateGame(g, msg)
+            terminateHand(g, personWon=False)
             return True
     return False
 
@@ -867,15 +1249,15 @@ def goToState35(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     g = p.getGame()
     giveInstruction = input is None
-    god_id, god_name = g.getGodPlayerIdAndName()
+    god_id, god_name = g.getGodIdAndName()
     currentPlayerId, currentPlayerName = g.getCurrentPlayerIdAndName()
     isGod = p.chat_id == god_id
     isPlayerTurn = p.chat_id == currentPlayerId
+    player_kb = [[icons.YES_BUTTON, icons.NO_BUTTON]]
     if giveInstruction:
         if isPlayerTurn:
             msg = "{} Do you want to be a Prophet?".format(icons.EYES)
-            player_kb = [[icons.YES_BUTTON, icons.NO_BUTTON]]
-            tell(p.chat_id, msg, player_kb)
+            tell(p.chat_id, msg, player_kb, one_time_keyboard=True)
         else:
             msg = "Let's see if {} wants to be a Prophet...".format(currentPlayerName)
             tell(p.chat_id, msg, remove_keyboard=isGod)
@@ -883,16 +1265,17 @@ def goToState35(p, **kwargs):
         if isPlayerTurn:
             if input in [icons.YES_BUTTON, icons.NO_BUTTON]:
                 if input == icons.YES_BUTTON:
-                    msg = "Great news: {} is the new Prophet!".format(currentPlayerName)
+                    g.setCurrentProphetId(currentPlayerId)
+                    msg = "{} Great news: {} is the new Prophet!".format(icons.PROPHET, currentPlayerName)
                     broadcastMsgToPlayers(g, msg)
-                    g.setUpProphet()
+                    broadcastGameBoardPlayers(g)
                 else:
                     msg = "{} has decided not to be a prophet!".format(currentPlayerName)
                     broadcastMsgToPlayers(g, msg)
                 g.setUpNextTurn()
                 redirectPlayersToState(g, 32)
             else:
-                tell(p.chat_id, messages.NOT_VALID_INPUT)
+                tell(p.chat_id, messages.NOT_VALID_INPUT, kb = player_kb)
         else:
             msg = "{} Please wait for {} to decide whether s/he wants to be a Prophet.".format(icons.EXCLAMATION_ICON, currentPlayerName)
             tell(p.chat_id, msg)
@@ -945,8 +1328,7 @@ class CheckExpiredGames(SafeRequestHandler):
     def get(self):
         for g in Game.query():
             if g.isGameExpired():
-                msg = "{} The game has terminated because it has been idle for too long".format(icons.TIME_ICON)
-                terminateGame(g, msg)
+                terminateHand(g, expired = True)
 
 # ================================
 #  CALLBACK QUERY
@@ -1004,6 +1386,7 @@ class WebhookHandler(SafeRequestHandler):
             logging.info("Text: " + text)
             if text == '/help':
                 tell(chat_id, messages.INSTRUCTIONS)
+                return
             elif text.startswith("/start"):
                 p = person.addPerson(chat_id, name, last_name, username)
                 msg = "Hi {}, welcome to EleusisBot!\n".format(p.getFirstName()) # + START_MESSAGE
@@ -1018,8 +1401,10 @@ class WebhookHandler(SafeRequestHandler):
             p.updateInfo(name, last_name, username)
             if text == '/help':
                 tell(chat_id, messages.COMMNADS)
+                return
             if text == '/info':
                 tell(chat_id, messages.INSTRUCTIONS)
+                return
             elif text == '/state':
                 if p.state in STATES:
                     tell(p.chat_id, "You are in state " + str(p.state) + ": " + STATES[p.state])
@@ -1030,7 +1415,7 @@ class WebhookHandler(SafeRequestHandler):
                     msg = "{} You are still in a game!".format(icons.EXCLAMATION_ICON)
                     tell(p.chat_id, msg)
                 else:
-                    msg = "Hi {}, welcome back to EleusisBot!\n\n".format(p.getFirstName())
+                    msg = "Hi {}, welcome back to EleusisBot!\n".format(p.getFirstName())
                     tell(p.chat_id, msg)
                     p.setEnabled(True, put=False)
                     restart(p)
@@ -1040,7 +1425,7 @@ class WebhookHandler(SafeRequestHandler):
                     msg = "{} You are not in a game!".format(icons.EXCLAMATION_ICON)
                     tell(p.chat_id, msg)
                 else:
-                    terminateGame(g, "The game has terminated because {} exited.".format(p.getFirstName()))
+                    terminateHand(g, forcedExitName=p.getFirstName(), personWon=False)
             elif WORK_IN_PROGRESS and p.chat_id not in key.TEST_PLAYERS:
                 logging.debug('person {} not in {}'.format(p.chat_id, key.TEST_PLAYERS))
                 tell(p.chat_id, icons.UNDER_CONSTRUCTION + " System under maintanence, try later.")
