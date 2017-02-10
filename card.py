@@ -67,7 +67,7 @@ def getCardFromReprList(reprList):
 def getCardFromRender(s):
     if s.startswith('10') and len(s)==2:
         return None
-    if len(s)==1:
+    if len(s)<=1:
         return None
     number, suit_icon = (s[0:2], s[2:]) if s.startswith('10') else (s[0], s[1:])
     if number not in NUMBERS or suit_icon not in icons.ICON_SUITS:

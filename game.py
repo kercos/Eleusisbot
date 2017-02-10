@@ -341,7 +341,7 @@ class Game(ndb.Model):
         return result
 
     def setUpNextTurn(self, iterations=1):
-        exlclude_ids = [self.getGodPlayerId(), self.getCurrentProphetId()]
+        exlclude_ids = [self.getGodPlayerId(), self.getCurrentProphetId(), self.getPlayersEliminated()]
         logging.debug("Setting up next turn. Exluding ids: {}".format(exlclude_ids))
         number_of_players = self.getNumberOfSeats()
         index = self.getPlayerTurnIndex()

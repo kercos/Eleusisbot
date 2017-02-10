@@ -69,11 +69,11 @@ def sendRequest(url, data, recipient_chat_id, debugInfo):
             p = person.getPersonById(recipient_chat_id)
             if error_code == 403:
                 # Disabled user
-                logging.info('Disabled user: ' + p.getUserInfoString())
+                logging.info('Disabled user: ' + p.getFirstNameLastNameUserName())
             elif error_code == 400 and description == "INPUT_USER_DEACTIVATED":
                 p = person.getPersonById(recipient_chat_id)
                 p.setEnabled(False, put=True)
-                debugMessage = '❗ Input user disactivated: ' + p.getUserInfoString()
+                debugMessage = '❗ Input user disactivated: ' + p.getFirstNameLastNameUserName()
                 logging.debug(debugMessage)
                 tell(key.FEDE_CHAT_ID, debugMessage, markdown=False)
             else:
