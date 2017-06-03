@@ -1441,7 +1441,14 @@ def deferredSafeHandleException(obj, *args, **kwargs):
         report_exception()
 
 def report_exception():
-    import traceback
+    import sys, traceback
+    from google.appengine.ext.db import InternalError
+    exc_type, exc_value, exc_traceback = sys.exc_info()
+    if exc_type == InternalError:
+        msg = 'Cought GAE db internal error (ignored)'
+        tell(key.FEDE_CHAT_ID, msg, markdown=False)
+        logging.info(msg)
+        return
     msg = "❗ Detected Exception: " + traceback.format_exc()
     tell(key.FEDE_CHAT_ID, msg, markdown=False)
     logging.error(msg)
