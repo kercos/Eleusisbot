@@ -11,8 +11,6 @@ from time import sleep
 import re
 
 # standard app engine imports
-from google.appengine.api import urlfetch
-from google.appengine.ext import ndb
 from google.appengine.ext import deferred
 from google.appengine.ext.db import datastore_errors
 import requests
@@ -29,9 +27,11 @@ import utility
 import jsonUtil
 import utility
 import parameters
-import render_results
 import autorule
 import date_time_util
+
+from google.appengine.api import urlfetch
+urlfetch.set_default_fetch_deadline(45)
 
 ########################
 WORK_IN_PROGRESS = False
@@ -255,6 +255,7 @@ def sendPhotoData(chat_id, file_data, filename):
 
 
 def sendScoreTest(chat_id):
+    import render_results
     result_table = [
         ['', '👺🃏(x3)', '🕵🔭(x2)', '🕵🃏(x2)', 'TOTAL'],
         ['👺 player1_xx', '4+1', '1', '2', '21'],
@@ -428,13 +429,13 @@ def terminateHand(g, expired=False, forcedExitName=None, personWon=True):
     else:
         if personWon is False:
             msg += "Game has terminated since all players have been eliminated!\n\n"
+        elif g.checkIfCurrentPlayerHasNoCardsLeft():
+            handWinnerMsg = "{0} {1} has finished all his/her cards!! {0}".format(icons.TROPHY, g.getCurrentPlayerName())
+            broadcastMsgToPlayers(g, handWinnerMsg)
         msg = "{} The *secret rule* of the game was:\n{}".format(icons.KEY, utility.escapeMarkdown(g.getGodRule()))
         broadcastMsgToPlayers(g, msg)
         broadcastGameBoardPlayers(g)
         broadcastGameResultTableToPlayers(g)
-        if g.checkIfCurrentPlayerHasWon():
-            handWinnerMsg = "{0} {1} has won the current hand!! {0}".format(icons.TROPHY, g.getCurrentPlayerName())
-            broadcastMsgToPlayers(g, handWinnerMsg)
         if g.allHandsHaveBeenPlayed():
             finalWinnerMsg = "{} The winner of the game is {}! {}".format(
                 icons.TROPHY*3, g.getFinalWinnerName(), icons.TROPHY*3)
@@ -471,6 +472,7 @@ def broadcastWaitingActionToPlayers(g, exclude = (), sleep_time=None):
             sendWaitingAction(chat_id, sleep_time = sleep_time)
 
 def broadcastGameResultTableToPlayers(g):
+    import render_results
     result_table = g.computeScores()
     file_data = render_results.getResultImage(result_table)
     for id in g.getPlayersId():
@@ -787,8 +789,13 @@ def goToState32(p, **kwargs):
                       "or press {} if you think you have no cards to play.".format(icons.EYES, icons.NO_PLAY_BUTTON)
             elif selected_cards:
                 selected_cards_str = ', '.join(selected_cards)
-                msg = "You have selected the following card(s):\n\n{}\n\n" \
-                      "{} Please, select more cards or submit.".format(selected_cards_str, icons.EYES)
+                if len(selected_cards) == parameters.MAX_NUMBER_OF_PROPOSED_CARDS:
+                    msg = "You have selected the following card(s):\n\n{}\n\n" \
+                          "{} Please, modify the selected cards or submit " \
+                          "(you reached the maximum number of cards you can select).".format(selected_cards_str, icons.EYES)
+                else:
+                    msg = "You have selected the following card(s):\n\n{}\n\n" \
+                          "{} Please, select more cards or submit.".format(selected_cards_str, icons.EYES)
             else:
                 msg = "{} Please, select a card " \
                       "or press {} if you think you have no card to play.".format(icons.EYES, icons.NO_PLAY_BUTTON)
@@ -819,8 +826,13 @@ def goToState32(p, **kwargs):
                 elif input == icons.NO_PLAY_BUTTON:
                     redirectPlayersToState(g, 34)
             elif g.isValidCard(input):
-                g.appendInProposedCardsAndRemoveFromHand(input)
-                repeatState(p, continuation=True)
+                if len(g.getProposedCards())== parameters.MAX_NUMBER_OF_PROPOSED_CARDS:
+                    msg = "❗ You have reached the  maximum number of cards you can select. " \
+                          "Please, modify the selected cards or submit"
+                    tell(p.chat_id, msg)
+                else:
+                    g.appendInProposedCardsAndRemoveFromHand(input)
+                    repeatState(p, continuation=True)
             else:
                 tell(p.chat_id, messages.NOT_VALID_INPUT)
         else:
@@ -914,7 +926,7 @@ def godAcceptanceCards(g, accepted, currentPlayerName, currentPlayerId):
     askToBeAProphetOrGoToNextTurn(g)
 
 # ================================
-# GO TO STATE 331: Game: God judges Prophet on card acceptence
+# GO TO STATE 331: Game: God judges Prophet on card acceptence/rejection
 # ================================
 def goToState331(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
@@ -966,13 +978,17 @@ def goToState331(p, **kwargs):
                         return
             elif input == NO_EXPLANATION_BUTTON:
                 if prophetDecision == icons.YES_BUTTON:
+                    #g.rejectProposedCards(prophetDecision=True, getPenaltyCards=True, doubleCardsInPenalty=False)
                     g.rejectProposedCards(prophetDecision=True, getPenaltyCards=False)
-                    msg = "{} God disagrees with the Prophet's decision " \
-                          "of accepting the cards proposed by {} ." \
-                          "who won't get any penalty cards.".format(icons.CANCEL, currentPlayerName)
+                    msg = "{0} God disagrees with the Prophet's decision " \
+                          "of accepting the cards proposed by {1}." \
+                          "{1} doesn't get any penalty card.".format(icons.CANCEL, currentPlayerName)
+                     #     "{1} Will get back the same number of cards proposed."
                     overthrowProphet(g, msg, playerWasWrong=True)
-                    if checkIfPlayerIsEliminatedAndTerminateHand(g):
+                    if checkIfCurrentPlayerHasWonAndTerminateHand(g):
                         return
+                    #if checkIfPlayerIsEliminatedAndTerminateHand(g):
+                    #    return
                 else:
                     g.acceptProposedCards()
                     msg = "{} God disagrees with the Prophet's decision " \
@@ -1192,6 +1208,9 @@ def goToState341(p, **kwargs):
 
 def updateCurrentPlayerCards(g, msg):
     currentPlayerId = g.getCurrentPlayerId()
+    updatePlayerCards(g, currentPlayerId, msg)
+
+def updatePlayerCards(g, currentPlayerId, msg):
     cards = g.getSinglePlayerCards(currentPlayerId, emoji=True)
     if cards:
         player_kb = utility.distributeElementMaxSize(cards, maxSize=parameters.CARDS_PER_ROW)
@@ -1217,7 +1236,7 @@ def overthrowProphet(g, msg, playerWasWrong):
     tell(currentProphetId, msgProphet, kb=prophet_kb)
 
 def checkIfCurrentPlayerHasWonAndTerminateHand(g):
-    if g.checkIfCurrentPlayerHasWon():
+    if g.checkIfCurrentPlayerHasNoCardsLeft():
         terminateHand(g)
         return True
     return False
@@ -1226,8 +1245,28 @@ def askToBeAProphetOrGoToNextTurn(g):
     if g.checkIfCurrentPlayerCanBeProphet(checkIfAskedEnable=True, put=True):
         redirectPlayersToState(g, 35)
     else:
+        broadcastNumberOfCardsOfPlayers(g)
         g.setUpNextTurn()
         redirectPlayersToState(g, 32)
+
+'''
+def broadcastNumberOfCardsOfCurrentPlayer(g):
+    p_id, p_name = g.getCurrentPlayerIdAndName()
+    cards_number = len(g.getSinglePlayerCards(p_id))
+    msg = "🖐 {} is left with {} cards.".format(p_name, cards_number)
+    broadcastMsgToPlayers(g, msg, exclude=[p_id])
+'''
+
+def broadcastNumberOfCardsOfPlayers(g):
+    players_cards = g.getPlayersCards()
+    god_id = g.getGodPlayerId()
+    players_name = g.getPlayersNames()
+    msg = "#⃣ Players Cards:"
+    for p_id, name in players_name.items():
+        if p_id == god_id:
+            continue
+        msg += "\n • {}: {}".format(name,len(players_cards[p_id]))
+    broadcastMsgToPlayers(g, msg)
 
 def checkIfPlayerIsEliminatedAndTerminateHand(g):
     if g.isSuddenDeath():
@@ -1272,6 +1311,7 @@ def goToState35(p, **kwargs):
                 else:
                     msg = "{} has decided not to be a prophet!".format(currentPlayerName)
                     broadcastMsgToPlayers(g, msg)
+                broadcastNumberOfCardsOfPlayers(g)
                 g.setUpNextTurn()
                 redirectPlayersToState(g, 32)
             else:
@@ -1290,12 +1330,10 @@ class SafeRequestHandler(webapp2.RequestHandler):
 
 class MeHandler(webapp2.RequestHandler):
     def get(self):
-        urlfetch.set_default_fetch_deadline(60)
         self.response.write(json.dumps(json.load(urllib2.urlopen(key.BASE_URL + 'getMe'))))
 
 class SetWebhookHandler(webapp2.RequestHandler):
     def get(self):
-        urlfetch.set_default_fetch_deadline(60)
         allowed_updates = ["message", "inline_query", "chosen_inline_result", "callback_query"]
         data = {
             'url': key.WEBHOOK_URL,
@@ -1307,14 +1345,12 @@ class SetWebhookHandler(webapp2.RequestHandler):
 
 class GetWebhookInfo(webapp2.RequestHandler):
     def get(self):
-        urlfetch.set_default_fetch_deadline(60)
         resp = requests.post(key.BASE_URL + 'getWebhookInfo')
         logging.info('GetWebhookInfo Response: {}'.format(resp.text))
         self.response.write(resp.text)
 
 class DeleteWebhook(webapp2.RequestHandler):
     def get(self):
-        urlfetch.set_default_fetch_deadline(60)
         resp = requests.post(key.BASE_URL + 'deleteWebhook')
         logging.info('DeleteWebhook Response: {}'.format(resp.text))
         self.response.write(resp.text)

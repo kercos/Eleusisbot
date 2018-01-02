@@ -3,4 +3,4 @@
 cron:
 - description: checking if games have been idle too long
   url: /checkExpiredGames
-  schedule: every 1 minutes
+  schedule: every 30 minutes
