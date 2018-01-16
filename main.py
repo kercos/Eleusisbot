@@ -472,6 +472,7 @@ def broadcastWaitingActionToPlayers(g, exclude = (), sleep_time=None):
             sendWaitingAction(chat_id, sleep_time = sleep_time)
 
 def broadcastGameResultTableToPlayers(g):
+    broadcastNumberOfCardsOfPlayers(g)
     import render_results
     result_table = g.computeScores()
     file_data = render_results.getResultImage(result_table)
@@ -1237,6 +1238,7 @@ def overthrowProphet(g, msg, playerWasWrong):
 
 def checkIfCurrentPlayerHasWonAndTerminateHand(g):
     if g.checkIfCurrentPlayerHasNoCardsLeft():
+        # game ends because a player finished the cards
         terminateHand(g)
         return True
     return False
@@ -1277,6 +1279,7 @@ def checkIfPlayerIsEliminatedAndTerminateHand(g):
         msgPlayer = "You have been eliminated!"
         tell(p_id, msgPlayer, remove_keyboard=True)
         if g.areAllPlayersEliminated():
+            # game ends because all players (except prophet if exists) have been eliminated
             terminateHand(g, personWon=False)
             return True
     return False
@@ -1364,6 +1367,7 @@ class CheckExpiredGames(SafeRequestHandler):
     def get(self):
         for g in Game.query():
             if g.isGameExpired():
+                # hand terminates becuase game has expired
                 terminateHand(g, expired = True)
 
 # ================================
@@ -1461,6 +1465,7 @@ class WebhookHandler(SafeRequestHandler):
                     msg = "{} You are not in a game!".format(icons.EXCLAMATION_ICON)
                     tell(p.chat_id, msg)
                 else:
+                    # hand terminates because a player has exited
                     terminateHand(g, forcedExitName=p.getFirstName(), personWon=False)
             elif WORK_IN_PROGRESS and p.chat_id not in key.TEST_PLAYERS:
                 logging.debug('person {} not in {}'.format(p.chat_id, key.TEST_PLAYERS))

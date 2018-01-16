@@ -26,7 +26,7 @@ TURN_PLAYER_INDEX = 'turn_player_id' # --> index of the player of current turn
 CARDS_DECK = 'cards_deck' # --> [card1_str, card2_str, ...]
 YEAR_COUNT = 'year_count' # --> int (incremented every accepted card)
 ACCEPTED_CARDS = 'accepted_cards' # --> [card1_str, card2_str, ...]
-REJECTED_CARDS = 'rejected_cards' # --> [ [ [c1_str, card2_str, ...], ... ], [...], ... ] # per each year a sequence of sequences
+REJECTED_CARDS = 'rejected_cards' # --> [ [ [c1_str, card2_str, ...], ... ], [...], ... ] # for each year a sequence of sequences
 PROPOSED_CARDS = 'proposed_cards' # --> [ c1, c2, ... ] # per each column a sequence of sequences
 CARDS_ON_TABLE = 'cards_on_table' # --> int
 PROPHET_ACCEPTED_REJECTED_CARDS = 'prophet_accepted_rejected_cards' # --> [int, int]
@@ -501,25 +501,46 @@ class Game(ndb.Model):
         return len(self.getSinglePlayerCards(p_id))==0
 
     def computeScores(self):
-        for score in self.game_variables[PLAYERS_SCORES].values():
-            score[0] = 0 # set current hand scores to zero
-        maxCardsHand = max([len(x) for x in self.getPlayersCards().values()])
+        logging.debug("Computing scores")
+        SCORES_DICT = self.game_variables[PLAYERS_SCORES]
+        for score in SCORES_DICT.values():
+            # set current hand scores to zero
+            score[0] = 0
+        number_cards_players = [len(x) for x in self.getPlayersCards().values()]
+        logging.debug("Players Cards: {}".format(number_cards_players))
+        maxCardsHand = max(number_cards_players)
+        logging.debug("maxCardsHand={}".format(maxCardsHand))
         for p_id in self.getPlayersId(excludingGod=True):
             cardsPlayer = len(self.getSinglePlayerCards(p_id))
             basePoints = maxCardsHand - cardsPlayer
             if cardsPlayer==0:
-                basePoints += 4
-            self.game_variables[PLAYERS_SCORES][p_id][0] = basePoints
+                basePoints += 4 # bonus for player who finished the cards
+            SCORES_DICT[p_id][0] = basePoints
+            logging.debug("Player id={} cardsPlayer={} basePoints={}".format(p_id, cardsPlayer, basePoints))
         prophet_id = self.getCurrentProphetId()
         if prophet_id:
             prophet_accepted, prophet_rejected = self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS]
             prophet_extra_points = prophet_accepted + 2 * prophet_rejected
-            self.game_variables[PLAYERS_SCORES][prophet_id][0] += prophet_extra_points
-        max_points = max([x[0] for x in self.game_variables[PLAYERS_SCORES].values()])
-        self.game_variables[PLAYERS_SCORES][self.getGodPlayerId()][0] = max_points
+            SCORES_DICT[prophet_id][0] += prophet_extra_points
+        max_points = max([x[0] for x in SCORES_DICT.values()])
+        if prophet_id:
+            # check for exception in rule3 of point to God
+            rec_sum = lambda x: sum(map(rec_sum, x)) if isinstance(x, list) else x
+            total_cards = sum(ACCEPTED_CARDS) + rec_sum(self.game_variables[ACCEPTED_CARDS])
+            cards_with_prophet = sum(self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS])
+            cards_before_prophet = total_cards - cards_with_prophet
+            logging.debug("total_cards={} cards_before_prophet={} cards_with_prophet={}".format(total_cards, cards_before_prophet, cards_with_prophet))
+            double_cards_before_prophet = cards_before_prophet*2
+            if double_cards_before_prophet < max_points:
+                SCORES_DICT[self.getGodPlayerId()][0] = double_cards_before_prophet
+                logging.debug("Exception of rule in assigning points to god: number of cards preceding the prophet less than highest score.")
+            else:
+                SCORES_DICT[self.getGodPlayerId()][0] = max_points
+        else:
+            SCORES_DICT[self.getGodPlayerId()][0] = max_points
         result_table = [['NAME', 'HAND', 'TOTAL']]
         for p_id in self.getPlayersId():
-            player_scores = self.game_variables[PLAYERS_SCORES][p_id]
+            player_scores = SCORES_DICT[p_id]
             player_scores[1] += player_scores[0]
             result_table.append([self.getPlayerName(p_id), str(player_scores[0]), str(player_scores[1])])
         return result_table
