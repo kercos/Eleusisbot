@@ -516,25 +516,30 @@ class Game(ndb.Model):
             if cardsPlayer==0:
                 basePoints += 4 # bonus for player who finished the cards
             SCORES_DICT[p_id][0] = basePoints
-            logging.debug("Player id={} cardsPlayer={} basePoints={}".format(p_id, cardsPlayer, basePoints))
+            logging.debug("Player id={} name={} cardsPlayer={} basePoints={}".format(
+                p_id, self.getPlayerName(p_id), cardsPlayer, basePoints))
         prophet_id = self.getCurrentProphetId()
         if prophet_id:
             prophet_accepted, prophet_rejected = self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS]
+            logging.debug("Prophet accepted and rejected cards: {}".format(self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS]))
             prophet_extra_points = prophet_accepted + 2 * prophet_rejected
+            logging.debug("Prophet extra points: {}".format(prophet_extra_points))
             SCORES_DICT[prophet_id][0] += prophet_extra_points
         max_points = max([x[0] for x in SCORES_DICT.values()])
+        logging.debug("Max score: {}".format(max_points))
         if prophet_id:
             # check for exception in rule3 of point to God
-            rec_sum = lambda x: sum(map(rec_sum, x)) if isinstance(x, list) else x
-            total_cards = sum(ACCEPTED_CARDS) + rec_sum(self.game_variables[ACCEPTED_CARDS])
+            rec_sum = lambda x: sum(map(rec_sum, x)) if isinstance(x, list) else 1
+            total_cards = len(self.game_variables[ACCEPTED_CARDS]) + rec_sum(self.game_variables[REJECTED_CARDS])
             cards_with_prophet = sum(self.game_variables[PROPHET_ACCEPTED_REJECTED_CARDS])
             cards_before_prophet = total_cards - cards_with_prophet
             logging.debug("total_cards={} cards_before_prophet={} cards_with_prophet={}".format(total_cards, cards_before_prophet, cards_with_prophet))
             double_cards_before_prophet = cards_before_prophet*2
             if double_cards_before_prophet < max_points:
                 SCORES_DICT[self.getGodPlayerId()][0] = double_cards_before_prophet
-                logging.debug("Exception of rule in assigning points to god: number of cards preceding the prophet less than highest score.")
+                logging.debug("Bad god rule=True: number of cards preceding the prophet < than highest score.")
             else:
+                logging.debug("Bad god rule=False: number of cards preceding the prophet >= than highest score.")
                 SCORES_DICT[self.getGodPlayerId()][0] = max_points
         else:
             SCORES_DICT[self.getGodPlayerId()][0] = max_points

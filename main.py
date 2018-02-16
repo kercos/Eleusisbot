@@ -459,7 +459,10 @@ def broadcastCardsToPlayers(g, exclude = ()):
             kb = utility.distributeElementMaxSize(cards, maxSize = parameters.CARDS_PER_ROW)
             tell(p_id, msg, kb)
 
-def broadcastGameBoardPlayers(g):
+def broadcastGameBoardPlayers(g):  
+    deferredSafeHandleException(broadcastGameBoardPlayersDeferred, g)  
+    
+def broadcastGameBoardPlayersDeferred(g):      
     import render_game_board
     file_data = render_game_board.render(g)
     for id in g.getPlayersId():

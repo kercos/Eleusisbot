@@ -4,7 +4,7 @@ from google.appengine.ext import ndb
 import icons
 
 
-INITIAL_DECKS = 3
+INITIAL_DECKS = 2
 CARDS_PER_PLAYER = 14
 CARDS_PER_ROW = 6
 
