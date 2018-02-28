@@ -129,7 +129,7 @@ RULE_TABLES = {
         'acceptance_function': blackOnOddRedOnEven,
     },
     'GREQ_ON_RED_LOWEQ_ON_BLACK': {
-        'rule_description': 'If the last legally played card was black, play a card of equal or higher value. If the last card played was red, play a card of equal or lower value.',
+        'rule_description': 'If the last legally played card was red, play a card of equal or higher value. If the last card played was black, play a card of equal or lower value.',
         'starter_function': all,
         'acceptance_function': grEqOnRedLowEqOnBlack,
     },
