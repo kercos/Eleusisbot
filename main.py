@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
 
-# import json
+# Set up requests
+# see https://cloud.google.com/appengine/docs/standard/python/issue-requests#issuing_an_http_request
+import requests_toolbelt.adapters.appengine
+requests_toolbelt.adapters.appengine.monkeypatch()
+from google.appengine.api import urlfetch
+urlfetch.set_default_fetch_deadline(20)
+#ignore warnings
+import warnings
+import urllib3.contrib.appengine
+warnings.filterwarnings('ignore', r'urllib3 is using URLFetch', urllib3.contrib.appengine.AppEnginePlatformWarning)
+
 import json
 import logging
 import urllib
 import urllib2
-import datetime
-from datetime import datetime
 from time import sleep
-import re
 
 # standard app engine imports
 from google.appengine.ext import deferred
@@ -23,15 +30,11 @@ import icons
 import messages
 import person
 from person import Person
-import utility
 import jsonUtil
 import utility
 import parameters
 import autorule
 import date_time_util
-
-from google.appengine.api import urlfetch
-urlfetch.set_default_fetch_deadline(45)
 
 ########################
 WORK_IN_PROGRESS = False
