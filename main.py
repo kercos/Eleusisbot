@@ -4,12 +4,11 @@
 # see https://cloud.google.com/appengine/docs/standard/python/issue-requests#issuing_an_http_request
 import requests_toolbelt.adapters.appengine
 requests_toolbelt.adapters.appengine.monkeypatch()
-from google.appengine.api import urlfetch
-urlfetch.set_default_fetch_deadline(20)
-#ignore warnings
-import warnings
-import urllib3.contrib.appengine
-warnings.filterwarnings('ignore', r'urllib3 is using URLFetch', urllib3.contrib.appengine.AppEnginePlatformWarning)
+#disable warnings
+import requests
+requests.packages.urllib3.disable_warnings(
+    requests.packages.urllib3.contrib.appengine.AppEnginePlatformWarning
+)
 
 import json
 import logging
@@ -58,6 +57,8 @@ STATES = {
 # Telegram Send Request
 # ================================
 def sendRequest(url, data, recipient_chat_id, debugInfo):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         resp = requests.post(url, data)
         logging.info('Response: {}'.format(resp.text))
