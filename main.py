@@ -200,6 +200,8 @@ def sendText(p, text, markdown=False, restartUser=False):
 # ================================
 
 def sendLocation(chat_id, latitude, longitude, kb=None):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         resp = urllib2.urlopen(key.BASE_URL + 'sendLocation', urllib.urlencode({
             'chat_id': chat_id,
@@ -221,6 +223,8 @@ def sendLocation(chat_id, latitude, longitude, kb=None):
 # ================================
 
 def sendVoice(chat_id, file_id):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         data = {
             'chat_id': chat_id,
@@ -247,6 +251,8 @@ def sendPhoto(chat_id, file_id_or_url):
         report_exception()
 
 def sendPhotoData(chat_id, file_data, filename):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         files = [('photo', (filename, file_data, 'image/png'))]
         data = {
@@ -289,6 +295,8 @@ def sendTextImage(chat_id, text):
 # ================================
 
 def sendDocument(chat_id, file_id):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         data = {
             'chat_id': chat_id,
@@ -300,6 +308,8 @@ def sendDocument(chat_id, file_id):
         report_exception()
 
 def sendExcelDocument(chat_id, sheet_tables, filename='file'):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         xlsData = utility.convert_data_to_spreadsheet(sheet_tables)
         files = [('document', ('{}.xls'.format(filename), xlsData, 'application/vnd.ms-excel'))]
@@ -317,6 +327,8 @@ def sendExcelDocument(chat_id, sheet_tables, filename='file'):
 # ================================
 
 def sendWaitingAction(chat_id, action_type='typing', sleep_time=None):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     try:
         resp = urllib2.urlopen(key.BASE_URL + 'sendChatAction', urllib.urlencode({
             'chat_id': chat_id,
@@ -340,6 +352,8 @@ def sendWaitingAction(chat_id, action_type='typing', sleep_time=None):
 # telegram.me/EleusisBot?game=EleusisGame
 
 def sendGame(chat_id):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     data = {
         'chat_id': chat_id,
         'game_short_name': 'EleusisGame',
@@ -355,6 +369,8 @@ def sendGame(chat_id):
 # ================================
 
 def answerCallbackQueryGame(callback_query_id):
+    from google.appengine.api import urlfetch
+    urlfetch.set_default_fetch_deadline(20)
     data = {
         'callback_query_id': callback_query_id,
         'url': 'http://dialectbot.appspot.com/audiomap/mappa.html'
@@ -1269,21 +1285,23 @@ def broadcastNumberOfCardsOfCurrentPlayer(g):
 def broadcastNumberOfCardsOfPlayers(g):
     players_cards = g.getPlayersCards()
     god_id = g.getGodPlayerId()
+    eliminated_ids = g.getPlayersEliminated()
     players_name = g.getPlayersNames()
     msg = "#⃣ Players Cards:"
     for p_id, name in players_name.items():
         if p_id == god_id:
             continue
-        msg += "\n • {}: {}".format(name,len(players_cards[p_id]))
+        bullet = '☠️' if p_id in eliminated_ids else '•'
+        msg += "\n {} {}: {}".format(bullet, name, len(players_cards[p_id]))
     broadcastMsgToPlayers(g, msg)
 
 def checkIfPlayerIsEliminatedAndTerminateHand(g):
     if g.isSuddenDeath():
         g.setCurrentPlayerEliminated()
         p_id, p_name = g.getCurrentPlayerIdAndName()
-        msg = "{} has been eliminated!".format(p_name)
+        msg = "☠️ {} has been eliminated!".format(p_name)
         broadcastMsgToPlayers(g, msg, exclude=[p_id])
-        msgPlayer = "You have been eliminated!"
+        msgPlayer = "☠️ You have been eliminated!"
         tell(p_id, msgPlayer, remove_keyboard=True)
         if g.areAllPlayersEliminated():
             # game ends because all players (except prophet if exists) have been eliminated
