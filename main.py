@@ -1287,11 +1287,12 @@ def broadcastNumberOfCardsOfPlayers(g):
     god_id = g.getGodPlayerId()
     eliminated_ids = g.getPlayersEliminated()
     players_name = g.getPlayersNames()
+    prophet_id = g.getCurrentProphetId()
     msg = "#⃣ Players Cards:"
     for p_id, name in players_name.items():
         if p_id == god_id:
             continue
-        bullet = '☠️' if p_id in eliminated_ids else '•'
+        bullet = '☠️' if p_id in eliminated_ids else '🛐' if p_id==prophet_id else '👤'
         msg += "\n {} {}: {}".format(bullet, name, len(players_cards[p_id]))
     broadcastMsgToPlayers(g, msg)
 
